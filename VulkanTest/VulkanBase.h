@@ -96,6 +96,10 @@ private:
 	VkExtent2D swapChainExtent;
 	//图像视图
 	std::vector<VkImageView> swapChainImageViews;
+	//渲染流程
+	VkRenderPass renderPass;
+	//管线部局
+	VkPipelineLayout pipelineLayout;
 
 private :
 
@@ -121,6 +125,8 @@ private :
 	void createSwapChain();
 	//建立图像视图
 	void createImageViews();
+	//建立渲染Pass
+	void createRenderPass();
 	//建立图形管线
 	void createGraphicsPipeline();
 

@@ -49,6 +49,7 @@ void VulkanBase::initVulkan() {
 	createLogicalDevice();	//逻辑设备和队列
 	createSwapChain();		//创建交换链
 	createImageViews();		//创建图像视图
+	createRenderPass();		//创建渲染pass
 	createGraphicsPipeline();	//创建图形管线
 }
 
@@ -60,6 +61,12 @@ void VulkanBase::mainLoop() {
 }
 
 void VulkanBase::cleanup() {
+	
+	if(pipelineLayout != nullptr)
+		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+	if(renderPass != nullptr)
+		vkDestroyRenderPass(device, renderPass, nullptr);
+
 	for (auto imageView : swapChainImageViews) {
 		vkDestroyImageView(device, imageView, nullptr);
 	}
@@ -563,6 +570,70 @@ void VulkanBase::createImageViews() {
 #pragma endregion
 
 #pragma region 图形管线与shader
+
+//创建渲染pass
+void VulkanBase::createRenderPass()
+{
+	//缓冲附件，用于交换链图像的颜色缓冲
+	VkAttachmentDescription colorAttachment = {};
+	colorAttachment.format = swapChainImageFormat;
+	colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	//设置渲染前操作
+	//K_ATTACHMENT_LOAD_OP_LOAD：保持附件的现有内容
+	//VK_ATTACHMENT_LOAD_OP_CLEAR：使用一个常量值来清除附件的内容
+	//VK_ATTACHMENT_LOAD_OP_DONT_CARE：不关心附件现存的内容
+	colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;		//每次渲染新的一帧前使用黑色清除帧缓冲
+	//设置渲染后操作
+	//VK_ATTACHMENT_STORE_OP_STORE：渲染的内容会被存储起来，以便之后读取
+	//VK_ATTACHMENT_STORE_OP_DONT_CARE：渲染后，不会读取帧缓冲的内容
+	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	//设置模板缓冲
+	colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	//设置渲染前后的图像格式
+	//VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL：图像被用作颜色附件
+	//VK_IMAGE_LAYOUT_PRESENT_SRC_KHR：图像被用在交换链中进行呈现操作
+	//VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL：图像被用作复制操作的目的图像
+	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;			//不关心之前的图像布局方式
+	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;		//渲染后的图像可被交换链呈现
+
+	//附件引用
+	VkAttachmentReference colorAttchmentRef = {};
+	//attachment为附件索引号
+	colorAttchmentRef.attachment = 0;
+	//布局方式
+	colorAttchmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;	
+
+	//渲染子pass
+	VkSubpassDescription subpass = {};
+	//pass类型为图形渲染（非计算）
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	//指定颜色附件
+	subpass.colorAttachmentCount = 1;
+	//pColorAttachments对应fragment shader中的layout(location = 0) out vec4 outColor
+	//pInputAttachments：被着色器读取的附件
+	//pResolveAttachments：用于多重采样的颜色附件
+	//pDepthStencilAttachment：用于深度和模板数据的附件
+	//pPreserveAttachments：没有被这一子流程使用，但需要保留数据的附件
+	subpass.pColorAttachments = &colorAttchmentRef;
+
+	//渲染pass
+	//渲染pass createinfo
+	VkRenderPassCreateInfo renderPassInfo = {};
+	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	renderPassInfo.attachmentCount = 1;
+	renderPassInfo.pAttachments = &colorAttachment;
+	renderPassInfo.subpassCount = 1;
+	renderPassInfo.pSubpasses = &subpass;
+
+	if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS)
+	{
+		throw std::runtime_error("创建渲染pass失败");
+	}
+	
+}
+
+
 //创建图形管线
 void VulkanBase::createGraphicsPipeline() {
 
@@ -638,7 +709,88 @@ void VulkanBase::createGraphicsPipeline() {
 	viewportState.scissorCount = 1;
 	viewportState.pScissors = &scissor;
 
+	//光栅化
+	VkPipelineRasterizationStateCreateInfo rasterizer = {};
+	rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+	//epthClampEnable 设置为VK_TRUE 表示在近平面和远平面外的片段会被截断为在近平面和远平面上，而不是直接丢弃这些片段。这对于阴影贴图的生成很有用
+	rasterizer.depthClampEnable = VK_FALSE;
+	//rasterizerDiscardEnable 设置为VK_TRUE 表示所有几何图元都不能通过光栅化阶段。这一设置会禁止一切片段输出到帧缓冲。
+	rasterizer.rasterizerDiscardEnable = VK_FALSE;
+	//polygonMode 指定几何图元生成片段的方式
+		//VK_POLYGON_MODE_FILL：整个多边形，包括多边形内部都产生片段
+		//VK_POLYGON_MODE_LINE：只有多边形的边会产生片段
+		//VK_POLYGON_MODE_POINT：只有多边形的顶点会产生片段
+	rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+	//lineWidth指定光栅化后的线段宽度，它以线宽所占的片段数目为单位。线宽的最大值依赖于硬件，使用大于1.0f 的线宽，需要启用相应的GPU 特性。
+	rasterizer.lineWidth = 1.0f;
+	//cullMode指定使用的表面剔除类型,可以通过它禁用表面剔除，剔除背面，剔除正面，以及剔除双面
+	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+	//frontFace于指定顺时针的顶点序是正面，还是逆时针的顶点序是正面
+	rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+	rasterizer.depthBiasEnable = VK_FALSE;
+	rasterizer.depthBiasConstantFactor = 0.0f;	//可选
+	rasterizer.depthBiasClamp = 0.0f;			//可选
+	rasterizer.depthBiasSlopeFactor = 0.0f;		//可选
 
+
+	//多重采样
+	VkPipelineMultisampleStateCreateInfo multisampling = {};
+	multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+	multisampling.sampleShadingEnable = VK_FALSE;
+	multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	multisampling.minSampleShading = 1.0f;				//可选
+	multisampling.pSampleMask = nullptr;				//可选
+	multisampling.alphaToCoverageEnable = VK_FALSE;		//可选
+	multisampling.alphaToOneEnable = VK_FALSE;			//可选
+
+	//深度和模板测试
+	VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo = {};
+	depthStencilStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+	
+
+	//颜色混合
+	VkPipelineColorBlendAttachmentState colorBlendAttachment = {};
+	colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+	colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+	colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+	colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+	colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+	colorBlendAttachment.blendEnable = VK_TRUE;
+
+	VkPipelineColorBlendStateCreateInfo colorBlending = {};
+	colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+	colorBlending.logicOpEnable = VK_FALSE;
+	colorBlending.logicOp = VK_LOGIC_OP_COPY;				//可选
+	colorBlending.attachmentCount = 1;
+	colorBlending.pAttachments = &colorBlendAttachment;
+	colorBlending.blendConstants[0] = 0.0f;					//可选
+	colorBlending.blendConstants[1] = 0.0f;					//可选
+	colorBlending.blendConstants[2] = 0.0f;					//可选
+	colorBlending.blendConstants[3] = 0.0f;					//可选
+
+	//动态状态
+	VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_LINE_WIDTH};
+	VkPipelineDynamicStateCreateInfo dynamicState = {};
+	dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+	dynamicState.dynamicStateCount = 2;
+	dynamicState.pDynamicStates = dynamicStates;
+
+
+	//管线部局
+	//管理部局可以用于设置shader中的uniform变量	
+	VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
+	pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	pipelineLayoutInfo.setLayoutCount = 0;						//可选
+	pipelineLayoutInfo.pSetLayouts = nullptr;					//可选
+	pipelineLayoutInfo.pushConstantRangeCount = 0;				//可选
+	pipelineLayoutInfo.pPushConstantRanges = nullptr;			//可选
+
+	if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
+	{
+		throw std::runtime_error("创建管线部局失败");
+	}
 
 
 	//用完后清除shader模块(字节封装)
