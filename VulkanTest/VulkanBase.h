@@ -100,6 +100,14 @@ private:
 	VkRenderPass renderPass;
 	//管线部局
 	VkPipelineLayout pipelineLayout;
+	//图形渲染管线
+	VkPipeline graphicsPipeline;
+	//帧缓冲
+	std::vector<VkFramebuffer> swapChainFrameBuffers;
+	//命令池
+	VkCommandPool commandPool;
+	//命令缓冲，命令缓冲对象会在命令缓冲池被清除时自动被清除
+	std::vector<VkCommandBuffer> commandBuffers;
 
 private :
 
@@ -129,6 +137,12 @@ private :
 	void createRenderPass();
 	//建立图形管线
 	void createGraphicsPipeline();
+	//建立帧缓冲
+	void createFramebuffers();
+	//建立命令池
+	void createCommandPool();
+	//建立命令缓冲
+	void createCommandBuffer();
 
 
 	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);

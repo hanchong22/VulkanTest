@@ -51,6 +51,9 @@ void VulkanBase::initVulkan() {
 	createImageViews();		//创建图像视图
 	createRenderPass();		//创建渲染pass
 	createGraphicsPipeline();	//创建图形管线
+	createFramebuffers();		//创建帧缓冲
+	createCommandPool();		//创建创建命令池
+	createCommandBuffer();		//建立命令缓冲
 }
 
 
@@ -60,16 +63,24 @@ void VulkanBase::mainLoop() {
 	}
 }
 
-void VulkanBase::cleanup() {
-	
-	if(pipelineLayout != nullptr)
-		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-	if(renderPass != nullptr)
-		vkDestroyRenderPass(device, renderPass, nullptr);
+void VulkanBase::cleanup() {	
+
+	vkDestroyCommandPool(device, commandPool, nullptr);
+	commandBuffers.clear();
+	vkDestroyPipeline(device, graphicsPipeline,nullptr);	
+	vkDestroyPipelineLayout(device, pipelineLayout, nullptr);	
+	vkDestroyRenderPass(device, renderPass, nullptr);
+
+	for (auto frameBuffer : swapChainFrameBuffers)
+	{
+		vkDestroyFramebuffer(device,frameBuffer,nullptr);
+	}
+	swapChainFrameBuffers.clear();
 
 	for (auto imageView : swapChainImageViews) {
 		vkDestroyImageView(device, imageView, nullptr);
 	}
+	swapChainImageViews.clear();
 
 	vkDestroySwapchainKHR(device, swapChain, nullptr);
 	vkDestroyDevice(device, nullptr);
@@ -625,11 +636,16 @@ void VulkanBase::createRenderPass()
 	renderPassInfo.pAttachments = &colorAttachment;
 	renderPassInfo.subpassCount = 1;
 	renderPassInfo.pSubpasses = &subpass;
+	
+	
+	
 
 	if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS)
 	{
 		throw std::runtime_error("创建渲染pass失败");
 	}
+
+	
 	
 }
 
@@ -792,6 +808,33 @@ void VulkanBase::createGraphicsPipeline() {
 		throw std::runtime_error("创建管线部局失败");
 	}
 
+	VkGraphicsPipelineCreateInfo pipelineInfo = {};
+	pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+	pipelineInfo.stageCount = 2;
+	pipelineInfo.pStages = shaderStages;
+	pipelineInfo.pVertexInputState = &vertexInputInfo;
+	pipelineInfo.pInputAssemblyState = &inputAssembly;
+	pipelineInfo.pViewportState = &viewportState;
+	pipelineInfo.pRasterizationState = &rasterizer;
+	pipelineInfo.pMultisampleState = &multisampling;
+	pipelineInfo.pDepthStencilState = nullptr;				//可选
+	pipelineInfo.pColorBlendState = &colorBlending;
+	pipelineInfo.pDynamicState = nullptr;					//可选
+
+	pipelineInfo.layout = pipelineLayout;
+	pipelineInfo.renderPass = renderPass;
+	//子sub索引
+	pipelineInfo.subpass = 0;
+	//指定继承的其它已经存在的管线（可选）
+	pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;		//可选
+	//指定的将要创建的管线为基管线（可选）
+	pipelineInfo.basePipelineIndex = -1;					//可选
+
+	if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS)
+	{
+		throw std::runtime_error("创建图形渲染管线失败");
+	}
+
 
 	//用完后清除shader模块(字节封装)
 	vkDestroyShaderModule(device, fragShader, nullptr);
@@ -818,7 +861,128 @@ VkShaderModule VulkanBase::createShaderModule(const std::vector<char>& code)
 
 #pragma endregion
 
+#pragma region 帧缓冲与命令缓冲
 
+
+
+//创建帧缓冲区
+void VulkanBase::createFramebuffers()
+{
+	swapChainFrameBuffers.resize(swapChainImageViews.size());
+	for (auto i = 0ULL; i < swapChainImageViews.size(); ++i)
+	{
+		VkImageView attachments[]{ swapChainImageViews[i] };
+
+
+		VkFramebufferCreateInfo framebufferInfo = {};
+		framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebufferInfo.renderPass = renderPass;
+		framebufferInfo.attachmentCount = 1;
+		framebufferInfo.pAttachments = attachments;
+		framebufferInfo.width = swapChainExtent.width;
+		framebufferInfo.height = swapChainExtent.height;
+		framebufferInfo.layers = 1;
+
+		if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &swapChainFrameBuffers[i]) != VK_SUCCESS)
+		{
+			throw std::runtime_error("创建帧缓冲失败");
+		}
+	}
+}
+
+//创建命令池
+void VulkanBase::createCommandPool()
+{
+	QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
+	VkCommandPoolCreateInfo commandPoolInfo = {};
+	commandPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+	//命令缓冲所属的队列
+	commandPoolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.has_value() ? queueFamilyIndices.graphicsFamily.value() : -1;
+	commandPoolInfo.flags = 0;			//可选
+
+	if (vkCreateCommandPool(device, &commandPoolInfo, nullptr, &commandPool) != VK_SUCCESS)
+	{
+		throw std::runtime_error("创建命令缓冲池失败");
+	}
+}
+
+
+//建立命令缓冲
+void VulkanBase::createCommandBuffer()
+{
+	commandBuffers.resize(swapChainFrameBuffers.size());
+
+	VkCommandBufferAllocateInfo allocInfo = {};
+	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	allocInfo.commandPool = commandPool;
+	//level用于指定分配的指令缓冲对象是主要指令缓冲对象还是辅助指令缓冲对象
+	//VK_COMMAND_BUFFER_LEVEL_PRIMARY：可以被提交到队列进行执行，但不能被其它指令缓冲对象调用
+	//VK_COMMAND_BUFFER_LEVEL_SECONDARY：不能直接被提交到队列进行执行，但可以被主要指令缓冲对象调用执行。
+	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
+
+	if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data() )!= VK_SUCCESS)
+	{
+		throw std::runtime_error("创建命令缓冲失败");
+	}
+
+	//记录命令到命令缓冲
+	for (size_t i = 0; i < commandBuffers.size(); ++i)
+	{
+		VkCommandBufferBeginInfo beginInfo = {};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		//怎样使用命令缓冲
+		//VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT：命令缓冲在执行一次后，就被用来记录新的命令
+		//VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT：这是一个只在一个渲染流程内使用的辅助命令缓冲。
+		//VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT：在命令缓冲等待执行时，仍然可以提交这一命令缓冲。
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;	//这使得我们可以在上一帧还未结束渲染时，提交下一帧的渲染指令
+		beginInfo.pInheritanceInfo = nullptr;							//可选
+
+		if (vkBeginCommandBuffer(commandBuffers[i], &beginInfo) != VK_SUCCESS)
+		{
+			throw std::runtime_error("开始录制命令缓冲失败");
+		}
+
+		//设置开始渲染pass
+		VkRenderPassBeginInfo renderPassInfo = {};
+		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		renderPassInfo.renderPass = renderPass;
+		renderPassInfo.framebuffer = swapChainFrameBuffers[i];
+		renderPassInfo.renderArea.offset = { 0, 0 };
+		renderPassInfo.renderArea.extent = swapChainExtent;
+
+		//使用完全不透明的黑色作为清除值
+		VkClearValue clearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+		renderPassInfo.clearValueCount = 1;
+		renderPassInfo.pClearValues = &clearColor;
+		//VK_SUBPASS_CONTENTS_INLINE：所有要执行的指令都在主要指令缓冲中，没有辅助指令缓冲需要执行
+		//VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS：有来自辅助指令缓冲的指令需要执行
+		vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+		//绑定图形管线
+		//第二个参数于指定管线对象是图形管线还是计算管线,VK_PIPELINE_BIND_POINT_GRAPHICS表示是图形管线
+		vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+		//调用指令进行三角形的绘制操作
+		//vertexCount：尽管这里我们没有使用顶点缓冲，但仍然需要指定三个顶点用于三角形的绘制
+		//instanceCount：用于实例渲染，为1 时表示不进行实例渲染。
+		//firstVertex：用于定义着色器变量gl_VertexIndex 的值
+		//firstInstance：用于定义着色器变量gl_InstanceIndex 的值
+		vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
+
+		//结束渲染流程
+		vkCmdEndRenderPass(commandBuffers[i]);
+
+		//结束记录指令
+		if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
+			throw std::runtime_error("录制命令缓冲失败");
+		}
+	}
+
+	
+}
+
+#pragma endregion
 
 
 
