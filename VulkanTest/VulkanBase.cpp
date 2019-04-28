@@ -7,6 +7,7 @@ const bool enableValidationLayers = false;
 const bool enableValidationLayers = true;
 #endif
 
+
 const int WIDTH = 1280;
 const int HEIGHT = 720;
 
@@ -54,7 +55,7 @@ void VulkanBase::initVulkan() {
 	createFramebuffers();		//创建帧缓冲
 	createCommandPool();		//创建创建命令池
 	createCommandBuffer();		//建立命令缓冲
-	createSemaphores();			//建立信号量
+	createSyncObjects();		//建立同步对象
 }
 
 //主循环
@@ -70,9 +71,13 @@ void VulkanBase::mainLoop() {
 
 void VulkanBase::cleanup() {	
 
-	vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
-	vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
-	vkDestroyFence(device, inFlightFence, nullptr);
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+	{
+		vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+		vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+		vkDestroyFence(device, inFlightFences[i], nullptr);
+	}
+	
 	vkDestroyCommandPool(device, commandPool, nullptr);
 	commandBuffers.clear();
 	vkDestroyPipeline(device, graphicsPipeline,nullptr);	
@@ -1009,22 +1014,31 @@ void VulkanBase::createCommandBuffer()
 #pragma endregion
 
 #pragma region 渲染和显示
-//建立信号量,用于异步操作中的同步信号
+//建立信号量和光栅对象,用于异步操作中的同步信号
 //分别建立图形获取和渲染结束的信号量，一个用于通知开始渲染，另一个用于通知开始显示
-void VulkanBase::createSemaphores()
+void VulkanBase::createSyncObjects()
 {
+	imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+	renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+	inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
 	VkSemaphoreCreateInfo semaphoreCreateInfo = {};
 	semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
 	VkFenceCreateInfo fenceInfo = {};
 	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	//设置初始状态为已发出信号的状态，否则vkWaitForFences将不会收到信号，会永远等待下去
 	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-	if (vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS ||
-		vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS ||
-		vkCreateFence(device, &fenceInfo, nullptr, &inFlightFence) != VK_SUCCESS)
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
-		throw std::runtime_error("建立信号量失败");
+
+		if (vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+			vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
+			vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS)
+		{
+			throw std::runtime_error("建立信号量失败");
+		}
 	}
 
 	
@@ -1033,20 +1047,22 @@ void VulkanBase::createSemaphores()
 //绘制，每帧调用
 void VulkanBase::drawFrame()
 {
-	vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, std::numeric_limits<uint64_t>::max());
-	vkResetFences(device, 1, &inFlightFence);
+	//等待一组光栅(fence) 中的一个或全部光栅(fence) 发出信号,waitall设置为VK_TRUE在此处无意义，因为只有一个光栅
+	vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, std::numeric_limits<uint64_t>::max());
+	//收到光栅信号后，重置光栅对象为未发出信号的状态
+	vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
 	//从交换链获取图片,KHR后缀的都是与交换链相关的操作
 	uint32_t imageIndex;
-	//此操作是异步的，第4、5参数为获取图象完成后通知的对象，这里通知信号量
+	//此操作是异步的，第4、5参数为获取图象完成后通知的对象，这里通知当前帧图片信号量和当前帧的光栅对象，此处可以不用传入光栅对象
 	//最后一个参数是读取的图片索引，为交换链图片数组的索引号
-	vkAcquireNextImageKHR(device, swapChain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+	vkAcquireNextImageKHR(device, swapChain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphores[currentFrame], inFlightFences[currentFrame], &imageIndex);
 
 	//提交图片到指令缓冲
 	VkSubmitInfo submitInfo = {};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	//要等待的信号量对象
-	VkSemaphore waitSemaphore[] = {imageAvailableSemaphore};
+	VkSemaphore waitSemaphore[] = {imageAvailableSemaphores[currentFrame]};
 	//需要等待的管线阶段,这里我们需要写入颜色数据到图像，所以需要等待图像管线到达可以写入颜色附着的管线阶段
 	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 	submitInfo.waitSemaphoreCount = 1;
@@ -1057,11 +1073,11 @@ void VulkanBase::drawFrame()
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &commandBuffers[imageIndex];
 	//缓冲指令结束后通知的信号量
-	VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
+	VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
 	submitInfo.signalSemaphoreCount = 1;
 	submitInfo.pSignalSemaphores = signalSemaphores;
-	// 提交到图形列队，最后一个参数为光栅对象(可选)，用于指令缓冲结束后的光栅化操作，这里我们需要等待信号通知后自定义操作，所以不用传入光栅对象	
-	if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS)
+	// 提交到图形列队，最后一个参数为光栅对象(可选)，用于指令缓冲结束后的光栅化操作
+	if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS)
 	{
 		throw std::runtime_error("failed to submit draw command buffer!");
 	}
@@ -1080,7 +1096,8 @@ void VulkanBase::drawFrame()
 	//显示
 	vkQueuePresentKHR(presentQueue, &presendInfo);
 
-
+	//更新当前帧,帧数在0-MAX_FRAMES_IN_FLIGHT中循环
+	currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 

@@ -176,6 +176,7 @@ glslangValidator.exe -V shaders/shader_base.frag
     <ClCompile Include="VulkanBase.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="UtilDefines.h" />
     <ClInclude Include="VulkanBase.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -13,7 +13,8 @@
 #include <optional>
 #include <set>
 #include <memory>
-#include <fstream>
+#include "UtilDefines.h"
+
 
 
 //列队族查找结果
@@ -39,28 +40,7 @@ struct SwapChainSupportDetails {
 VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger);
 void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator);
 
-//工具：读取文件内容
-static std::vector<char> readFile(const std::string& fileName)
-{
-	//ate：从文件尾部开始读取
-	//binary：以二进制的形式读取文件
-	std::unique_ptr<std::ifstream> fl(new std::ifstream(fileName, std::ios::ate | std::ios::binary));	
-	if (!fl->is_open())
-	{
-		throw std::runtime_error("读取文件失败");
-	}
 
-	//使用ate 模式，从文件尾部开始读取，这样就能通过获取位置的接口获得文件大小
-	size_t fileSize = (size_t)fl->tellg();
-	std::vector<char> buffer(fileSize);
-
-	//将文件跳回头部，读取整个文件
-	fl->seekg(0);
-	fl->read(buffer.data(), fileSize);
-
-	fl->close();
-	return buffer;
-}
 
 class VulkanBase
 {
@@ -111,11 +91,13 @@ private:
 
 	//以下两个信号量用于渲染和显示，一个通知图像已被获取可以开始渲染，另一个通知渲染已经结束可以开始显示
 	//图像已被获取的信号量
-	VkSemaphore imageAvailableSemaphore;
+	std::vector<VkSemaphore> imageAvailableSemaphores;
 	//通知渲染已经结束的信号量
-	VkSemaphore renderFinishedSemaphore;
-	
-	VkFence inFlightFence;
+	std::vector<VkSemaphore> renderFinishedSemaphores;
+	//光栅对象,用于CPU 和GPU之间的同步，防止有超过MAX_FRAMES_IN_FLIGHT帧的指令同时被提交执行
+	std::vector<VkFence> inFlightFences;
+	//当前渲染的是那一帧
+	size_t currentFrame = 0;
 
 private :
 
@@ -151,8 +133,8 @@ private :
 	void createCommandPool();
 	//建立命令缓冲
 	void createCommandBuffer();
-	//建立信号量
-	void createSemaphores();
+	//建立同步对象
+	void createSyncObjects();
 	//绘制
 	void drawFrame();
 
