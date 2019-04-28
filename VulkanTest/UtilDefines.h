@@ -7,6 +7,19 @@
 //可并行处理的帧
 const int MAX_FRAMES_IN_FLIGHT = 2;
 
+//定义窗口大小
+const int WIDTH = 1280;
+const int HEIGHT = 720;
+
+//surface支持交换链的细节
+struct SwapChainSupportDetails {
+	//基础表面特性
+	VkSurfaceCapabilitiesKHR capabilities;
+	//表面支持的格式
+	std::vector<VkSurfaceFormatKHR> formats;
+	//支持的呈现模式
+	std::vector<VkPresentModeKHR> presentModes;
+};
 
 //工具：读取文件内容
 static std::vector<char> readFile(const std::string& fileName)

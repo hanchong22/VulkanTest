@@ -8,8 +8,6 @@ const bool enableValidationLayers = true;
 #endif
 
 
-const int WIDTH = 1280;
-const int HEIGHT = 720;
 
 //校验层
 const std::vector<const char*> validationLayers = {
@@ -20,7 +18,11 @@ const std::vector<const char*> deviceExtensions = {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
 
-
+//窗口大小改变时的回调
+static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+	auto app = reinterpret_cast<VulkanBase*>(glfwGetWindowUserPointer(window));
+	app->framebufferResized = true;
+}
 
 
 #pragma region 生命周期
@@ -37,10 +39,18 @@ void VulkanBase::initWindow() {
 	glfwInit();
 
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+	//允许窗口大小改变
+	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
 	window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+
+	//把当前对象传入作为用户自定义对象，以便在回调方法中找到当前VulkanBase实例
+	glfwSetWindowUserPointer(window, this);
+	//窗口大小改变时的回调
+	glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 }
+
+
 
 void VulkanBase::initVulkan() {
 	createInstance();		//创建实例
@@ -49,7 +59,7 @@ void VulkanBase::initVulkan() {
 	pickPhysicalDevice();	//选择物理设备和队列族
 	createLogicalDevice();	//逻辑设备和队列
 	createSwapChain();		//创建交换链
-	createImageViews();		//创建图像视图
+	createImageViews();		//创建交换链图像视图
 	createRenderPass();		//创建渲染pass
 	createGraphicsPipeline();	//创建图形管线
 	createFramebuffers();		//创建帧缓冲
@@ -71,33 +81,18 @@ void VulkanBase::mainLoop() {
 
 void VulkanBase::cleanup() {	
 
+	cleanupSwapChain();
+
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
 		vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
 		vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
 		vkDestroyFence(device, inFlightFences[i], nullptr);
-	}
+	}	
 	
+
 	vkDestroyCommandPool(device, commandPool, nullptr);
-	commandBuffers.clear();
-	vkDestroyPipeline(device, graphicsPipeline,nullptr);	
-	vkDestroyPipelineLayout(device, pipelineLayout, nullptr);	
-	vkDestroyRenderPass(device, renderPass, nullptr);
-
-	for (auto frameBuffer : swapChainFrameBuffers)
-	{
-		vkDestroyFramebuffer(device,frameBuffer,nullptr);
-	}
-	swapChainFrameBuffers.clear();
-
-	for (auto imageView : swapChainImageViews) {
-		vkDestroyImageView(device, imageView, nullptr);
-	}
-	swapChainImageViews.clear();
-
-	vkDestroySwapchainKHR(device, swapChain, nullptr);
 	vkDestroyDevice(device, nullptr);
-
 	if (enableValidationLayers) {
 		DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
 	}
@@ -245,6 +240,7 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT
 #pragma region 物理设备和队列族与逻辑队列
 //选择物理设备和队列族
 void VulkanBase::pickPhysicalDevice() {
+	//第一次调用，获得物理设备数量，以便初始化数组数量。
 	uint32_t deviceCount = 0;
 	vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
 
@@ -253,6 +249,7 @@ void VulkanBase::pickPhysicalDevice() {
 	}
 
 	std::vector<VkPhysicalDevice> devices(deviceCount);
+	//得到数量后进行第二次调用，返回可用的物理设备
 	vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
 	//选择第一个能满足需求的显卡
@@ -390,7 +387,8 @@ QueueFamilyIndices VulkanBase::findQueueFamilies(VkPhysicalDevice device)
 //创建窗口表面
 void VulkanBase::createSurface() {
 
-	//调用glf来完成窗体表面创建，避免仅支持windows平台
+	//调用glfw来完成VKsurface创建，这需要glfw的支持，3.0版本的glfw已经支持vulkan
+	//此操作将窗口与vulkan实例联系起来
 	if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create window surface!");
 	}	
@@ -430,11 +428,12 @@ void VulkanBase::createSwapChain() {
 	//在图像上的操作,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT表示图像可作为传输目的图像
 	createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
+	//指定多个队列族使用交换链图像的方式,对于图形队列和呈现队列不是同一个队列的情况有着很大影响,通过图形队列在交换链图像上进行绘制操作，然后将图像提交给呈现队列来显示
 	QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 	uint32_t queueFamilyIndices[] = { indices.graphicsFamily.value(), indices.presentFamily.value() };
 
-	//VK_SHARING_MODE_EXCLUSIVE：一张图像同一时间只间只能被一个队列族所拥有，在另一队列族使用它之前，必须显式地改变图像所有权。这一模式下性能表现最佳
-	//VK_SHARING_MODE_CONCURRENT：图像可以在多个队列族间使用，不需要显式地改变图像所有权。	
+	//VK_SHARING_MODE_EXCLUSIVE： 独占模式，一张图像同一时间只间只能被一个队列族所拥有，在另一队列族使用它之前，必须显式地改变图像所有权。这一模式下性能表现最佳
+	//VK_SHARING_MODE_CONCURRENT：协同模式，图像可以在多个队列族间使用，不需要显式地改变图像所有权。	
 	if (indices.graphicsFamily != indices.presentFamily) {
 		//如果图形和呈现不是同一个队列族（极少情况），我们使用协同模式来避免处理图像所有权问题。协同模式需要我们使用queueFamilyIndexCount 和pQueueFamilyIndices 来指定共享所有权的队列族
 		createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
@@ -445,10 +444,11 @@ void VulkanBase::createSwapChain() {
 		//如果图形队列族和呈现队列族是同一个队列族(大部分情况下都是这样)，我们就不能使用协同模式，协同模式需要我们指定至少两个不同的队列族。
 		createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	}
-
+	//为交换链中的图像指定一个固定的Transfrom变化操作
 	createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
 	//指定alpha 通道是否被用来和窗口系统中的其它窗口进行混合操作,这里将其设置为VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR来忽略掉alpha 通道。
 	createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+	//指定前面选好的显示模式
 	createInfo.presentMode = presentMode;
 	//clipped 成员变量被设置为VK_TRUE 表示我们不关心被窗口系统中的其它窗口遮挡的像素的颜色，这允许Vulkan 采取一定的优化措施，但如果我们回读窗口的像素值就可能出现问题
 	createInfo.clipped = VK_TRUE;
@@ -467,7 +467,50 @@ void VulkanBase::createSwapChain() {
 	swapChainExtent = extent;
 }
 
+//清除交换链
+void VulkanBase::cleanupSwapChain()
+{
+	for (auto frameBuffer : swapChainFrameBuffers)
+	{
+		vkDestroyFramebuffer(device, frameBuffer, nullptr);
+	}
+	swapChainFrameBuffers.clear();
 
+	//commandBuffers不需要重建，只需调用vkFreeCommandBuffers清除分配的指令缓冲对象
+	vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
+	//commandBuffers.clear();
+	vkDestroyPipeline(device, graphicsPipeline, nullptr);
+	vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+	vkDestroyRenderPass(device, renderPass, nullptr);
+
+
+
+	for (auto imageView : swapChainImageViews) {
+		vkDestroyImageView(device, imageView, nullptr);
+	}
+	swapChainImageViews.clear();
+
+	vkDestroySwapchainKHR(device, swapChain, nullptr);
+}
+
+void VulkanBase::recreateSwapChain() {
+	int width = 0, height = 0;
+	while (width == 0 || height == 0) {
+		glfwGetFramebufferSize(window, &width, &height);
+		glfwWaitEvents();
+	}
+
+	vkDeviceWaitIdle(device);
+
+	cleanupSwapChain();
+
+	createSwapChain();
+	createImageViews();
+	createRenderPass();
+	createGraphicsPipeline();
+	createFramebuffers();
+	createCommandBuffer();
+}
 
 //选择交换链表面格式
 //选择支持RGB和SRGB格式
@@ -497,15 +540,15 @@ VkPresentModeKHR VulkanBase::chooseSwapPresentMode(const std::vector<VkPresentMo
 	//VK_PRESENT_MODE_MAILBOX_KHR：这一模式是第二种模的另一个变种。它不会在交换链的队列满时阻塞应用程序，队列中的图像会被直接替换为应用程序新提交的图像。这一模式可以用来实现三倍缓冲，避免撕裂现象的同时减小了延迟问题。
 
 	//上面四种呈现模式，只有VK_PRESENT_MODE_FIFO_KHR 模式保证一定可用，所以需要编程来选择一种最佳模式(VK_PRESENT_MODE_MAILBOX_KHR优先)
-
+	//其它模式都不可用时才使用此模式
 	VkPresentModeKHR bestMode = VK_PRESENT_MODE_FIFO_KHR;
 
 	for (const auto& availablePresentMode : availablePresentModes) {
 		if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
-			return availablePresentMode;
+			return availablePresentMode;//最优模式
 		}
 		else if (availablePresentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
-			bestMode = availablePresentMode;
+			bestMode = availablePresentMode;//次优模式
 		}
 	}
 
@@ -520,7 +563,12 @@ VkExtent2D VulkanBase::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabili
 		return capabilities.currentExtent;
 	}
 	else {
-		VkExtent2D actualExtent = { WIDTH, HEIGHT };
+
+		int width, height;
+		glfwGetFramebufferSize(window, &width, &height);
+
+		VkExtent2D actualExtent = { width, height };
+		
 
 		actualExtent.width = std::max(capabilities.minImageExtent.width, std::min(capabilities.maxImageExtent.width, actualExtent.width));
 		actualExtent.height = std::max(capabilities.minImageExtent.height, std::min(capabilities.maxImageExtent.height, actualExtent.height));
@@ -557,9 +605,8 @@ SwapChainSupportDetails VulkanBase::querySwapChainSupport(VkPhysicalDevice devic
 	return details;
 }
 
-#pragma endregion
 
-#pragma region 图像视图
+//建立VkImageView，用于访问交换链中的图象
 void VulkanBase::createImageViews() {
 	//分配足够的数组空间来存储图像视图
 	swapChainImageViews.resize(swapChainImages.size());
@@ -677,7 +724,7 @@ void VulkanBase::createRenderPass()
 }
 
 
-//创建图形管线
+//创建图形管线、加载shader字节编码（编译后的shader）
 void VulkanBase::createGraphicsPipeline() {
 
 	//读取shader字节（需读取编译后的shader，先使用glslangValidator.exe编译shader代码）
@@ -688,6 +735,7 @@ void VulkanBase::createGraphicsPipeline() {
 	auto fragShader = createShaderModule(fragShaderCode);
 
 	//创建shader阶段，这里确定了shader的类型(frag或vectex)、执行函数
+	//创建vectexshader
 	VkPipelineShaderStageCreateInfo vertShaderStageInfo = {};
 	vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;//顶点着色器
@@ -696,18 +744,20 @@ void VulkanBase::createGraphicsPipeline() {
 	//以下代码可以向shader传递define，这些define一般用于shader内部的分支#if #else #endif
 	vertShaderStageInfo.pSpecializationInfo = nullptr;
 
+	//创建fragment shader
 	VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
 	fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;//片元着色器
 	fragShaderStageInfo.module = fragShader;
 	fragShaderStageInfo.pName = "main";
+	//向shader传递的预编译定义
 	fragShaderStageInfo.pSpecializationInfo = nullptr;
 
 	VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo ,fragShaderStageInfo };
 
 
 	//顶点输入
-	//todo::读取网格(mesh)文件传入
+	//todo::读取网格(mesh)文件传入，此demo中没有读取mesh文件，是因为在shader代码中定义了顶点数据。
 	VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 	vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT;
 	vertexInputInfo.vertexBindingDescriptionCount = 0;
@@ -715,7 +765,8 @@ void VulkanBase::createGraphicsPipeline() {
 	vertexInputInfo.vertexAttributeDescriptionCount = 0;
 	vertexInputInfo.pVertexAttributeDescriptions = nullptr;
 
-	//输入装配
+	//输入Assembly，即顶点数据类型
+	//Assembly用于指定顶点数据定义了哪种类型的几何图元，以及是否启用几何图元重复利用
 	VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
 	inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
 	//几何图元的类型
@@ -725,11 +776,12 @@ void VulkanBase::createGraphicsPipeline() {
 	//VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST：每三个顶点构成一个三角形图元
 	//VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP：每个三角形的第二个和第三个顶点被下一个三角形作为第一和第二个顶点使用
 	inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-	//是否启用几何图元重启
+	//是否启用几何图元重复利用，是指顶点可以重复利用在多个地方，以节省mesh数据尺寸
+	//如果需要重复利用顶点数据，可通过特殊索引值 0xFFFF	或0xFFFFFFFF将索引重新定义到顶点数组的第一个下标
 	inputAssembly.primitiveRestartEnable = VK_FALSE;
 
-	//视口和裁剪
-	//视口
+	//视口Viewport和裁剪Rect
+	//Viewport，用于定义输出渲染结果的帧缓冲区，此demo中会和窗口一样大
 	VkViewport viewPort = {};
 	viewPort.x = 0.0f;
 	viewPort.y = 0.0f;
@@ -752,12 +804,12 @@ void VulkanBase::createGraphicsPipeline() {
 	viewportState.scissorCount = 1;
 	viewportState.pScissors = &scissor;
 
-	//光栅化
+	//光栅化定义 Rasterization	
 	VkPipelineRasterizationStateCreateInfo rasterizer = {};
 	rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-	//epthClampEnable 设置为VK_TRUE 表示在近平面和远平面外的片段会被截断为在近平面和远平面上，而不是直接丢弃这些片段。这对于阴影贴图的生成很有用
+	//depthClampEnable 设置为VK_TRUE 表示在近平面和远平面外的片元会被截断为在近平面和远平面上，而不是直接丢弃这些片元。这对于阴影贴图的生成很有用
 	rasterizer.depthClampEnable = VK_FALSE;
-	//rasterizerDiscardEnable 设置为VK_TRUE 表示所有几何图元都不能通过光栅化阶段。这一设置会禁止一切片段输出到帧缓冲。
+	//rasterizerDiscardEnable 设置为VK_TRUE 表示所有几何图元都不能通过光栅化阶段。这一设置会禁止一切片元输出到帧缓冲。
 	rasterizer.rasterizerDiscardEnable = VK_FALSE;
 	//polygonMode 指定几何图元生成片段的方式
 		//VK_POLYGON_MODE_FILL：整个多边形，包括多边形内部都产生片段
@@ -776,9 +828,10 @@ void VulkanBase::createGraphicsPipeline() {
 	rasterizer.depthBiasSlopeFactor = 0.0f;		//可选
 
 
-	//多重采样
+	//多重采样(msaa)配置，常用于抗锯齿，需要启动相应的GPU特性
 	VkPipelineMultisampleStateCreateInfo multisampling = {};
 	multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+	//禁用多重采样
 	multisampling.sampleShadingEnable = VK_FALSE;
 	multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 	multisampling.minSampleShading = 1.0f;				//可选
@@ -791,7 +844,9 @@ void VulkanBase::createGraphicsPipeline() {
 	depthStencilStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
 	
 
-	//颜色混合
+	//两个颜色混合设置
+
+	//VkPipelineColorBlendAttachmentState对每个绑定的帧缓冲进行单独的颜色混合配置	
 	VkPipelineColorBlendAttachmentState colorBlendAttachment = {};
 	colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 	colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -800,10 +855,13 @@ void VulkanBase::createGraphicsPipeline() {
 	colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 	colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
 	colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+	//启用颜色混合,以达到半透明的效果
 	colorBlendAttachment.blendEnable = VK_TRUE;
 
+	//VkPipelineColorBlendStateCreateInfo全局的颜色混合配置
 	VkPipelineColorBlendStateCreateInfo colorBlending = {};
 	colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+	//禁用位运算的混合方式，采用colorBlendAttachment中定义的颜色混合方式，如果启动logicOpEnable，则所有的VkPipelineColorBlendAttachmentState都会被禁用
 	colorBlending.logicOpEnable = VK_FALSE;
 	colorBlending.logicOp = VK_LOGIC_OP_COPY;				//可选
 	colorBlending.attachmentCount = 1;
@@ -846,10 +904,10 @@ void VulkanBase::createGraphicsPipeline() {
 	pipelineInfo.pMultisampleState = &multisampling;
 	pipelineInfo.pDepthStencilState = nullptr;				//可选
 	pipelineInfo.pColorBlendState = &colorBlending;
-	pipelineInfo.pDynamicState = nullptr;					//可选
+	pipelineInfo.pDynamicState = nullptr;					//动态状态，可选
 
-	pipelineInfo.layout = pipelineLayout;
-	pipelineInfo.renderPass = renderPass;
+	pipelineInfo.layout = pipelineLayout;				//管线部局
+	pipelineInfo.renderPass = renderPass;				//渲染pass
 	//子sub索引
 	pipelineInfo.subpass = 0;
 	//指定继承的其它已经存在的管线（可选）
@@ -1056,7 +1114,16 @@ void VulkanBase::drawFrame()
 	uint32_t imageIndex;
 	//此操作是异步的，第4、5参数为获取图象完成后通知的对象，这里通知当前帧图片信号量和当前帧的光栅对象，此处可以不用传入光栅对象
 	//最后一个参数是读取的图片索引，为交换链图片数组的索引号
-	vkAcquireNextImageKHR(device, swapChain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphores[currentFrame], inFlightFences[currentFrame], &imageIndex);
+	//返回值表示交换链是否可用
+	auto result = vkAcquireNextImageKHR(device, swapChain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphores[currentFrame], inFlightFences[currentFrame], &imageIndex);
+
+	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+		recreateSwapChain();
+		return;
+	}
+	else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+		throw std::runtime_error("failed to acquire swap chain image!");
+	}
 
 	//提交图片到指令缓冲
 	VkSubmitInfo submitInfo = {};
@@ -1094,7 +1161,15 @@ void VulkanBase::drawFrame()
 	presendInfo.pImageIndices = &imageIndex;
 	presendInfo.pResults = nullptr;		//可选，每个交换链的呈现操作是否成功的信息，由于我们只使用了一个交换链，呈现函数的返回值来判断呈现操作是否成功，没有必要使用pResults
 	//显示
-	vkQueuePresentKHR(presentQueue, &presendInfo);
+	result = vkQueuePresentKHR(presentQueue, &presendInfo);
+
+	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+		framebufferResized = false;
+		recreateSwapChain();
+	}
+	else if (result != VK_SUCCESS) {
+		throw std::runtime_error("failed to present swap chain image!");
+	}
 
 	//更新当前帧,帧数在0-MAX_FRAMES_IN_FLIGHT中循环
 	currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;

@@ -27,15 +27,6 @@ struct QueueFamilyIndices {
 	}
 };
 
-//查询到的交换链细节信息
-struct SwapChainSupportDetails {
-	//基础表面特性
-	VkSurfaceCapabilitiesKHR capabilities;
-	//表面支持的格式
-	std::vector<VkSurfaceFormatKHR> formats;
-	//支持的呈现模式
-	std::vector<VkPresentModeKHR> presentModes;
-};
 
 VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger);
 void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator);
@@ -46,6 +37,10 @@ class VulkanBase
 {
 public:
 	void Run();
+
+public:
+	//窗口大小是否改变
+	bool framebufferResized = false;
 
 private:
 	GLFWwindow* window;
@@ -78,7 +73,7 @@ private:
 	std::vector<VkImageView> swapChainImageViews;
 	//渲染流程
 	VkRenderPass renderPass;
-	//管线部局
+	//管线部局，用于向shader传递uniform变量
 	VkPipelineLayout pipelineLayout;
 	//图形渲染管线
 	VkPipeline graphicsPipeline;
@@ -98,6 +93,7 @@ private:
 	std::vector<VkFence> inFlightFences;
 	//当前渲染的是那一帧
 	size_t currentFrame = 0;
+	
 
 private :
 
@@ -121,6 +117,10 @@ private :
 	void createLogicalDevice();
 	//建立交换链
 	void createSwapChain();
+	//清除交换链
+	void cleanupSwapChain();
+	//重建交换链
+	void recreateSwapChain();
 	//建立图像视图
 	void createImageViews();
 	//建立渲染Pass
