@@ -2,7 +2,7 @@
 #include <memory>
 
 int main() {
-	std::unique_ptr< VulkanBase> app(new VulkanBase());
+	std::unique_ptr<VulkanBase> app(new VulkanBase());
 	//VulkanBase *app = new VulkanBase();
 
 	try {

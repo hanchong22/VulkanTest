@@ -109,6 +109,14 @@ private:
 	//命令缓冲，命令缓冲对象会在命令缓冲池被清除时自动被清除
 	std::vector<VkCommandBuffer> commandBuffers;
 
+	//以下两个信号量用于渲染和显示，一个通知图像已被获取可以开始渲染，另一个通知渲染已经结束可以开始显示
+	//图像已被获取的信号量
+	VkSemaphore imageAvailableSemaphore;
+	//通知渲染已经结束的信号量
+	VkSemaphore renderFinishedSemaphore;
+	
+	VkFence inFlightFence;
+
 private :
 
 	//初始化窗口
@@ -143,6 +151,11 @@ private :
 	void createCommandPool();
 	//建立命令缓冲
 	void createCommandBuffer();
+	//建立信号量
+	void createSemaphores();
+	//绘制
+	void drawFrame();
+
 
 
 	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);

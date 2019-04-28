@@ -54,17 +54,25 @@ void VulkanBase::initVulkan() {
 	createFramebuffers();		//创建帧缓冲
 	createCommandPool();		//创建创建命令池
 	createCommandBuffer();		//建立命令缓冲
+	createSemaphores();			//建立信号量
 }
 
-
+//主循环
 void VulkanBase::mainLoop() {
 	while (!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
+		drawFrame();
 	}
+
+	vkDeviceWaitIdle(device);
 }
+
 
 void VulkanBase::cleanup() {	
 
+	vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
+	vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
+	vkDestroyFence(device, inFlightFence, nullptr);
 	vkDestroyCommandPool(device, commandPool, nullptr);
 	commandBuffers.clear();
 	vkDestroyPipeline(device, graphicsPipeline,nullptr);	
@@ -637,16 +645,30 @@ void VulkanBase::createRenderPass()
 	renderPassInfo.subpassCount = 1;
 	renderPassInfo.pSubpasses = &subpass;
 	
-	
-	
+
+	//子pass的依赖
+	//子pass需要依赖图形，可以设置等待信号量，也可以设置等待管线阶段
+	VkSubpassDependency dependency = {};
+	//渲染流程开始前的子pass
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;		//被依赖的子流程的索引,VK_SUBPASS_EXTERNAL为隐含的子流程
+	//渲染流程结束后的子pass,索引0是前面创建的子pass的索引，为了避免循环依赖,dstSupass必须大于srcSubpass
+	dependency.dstSubpass = 0;							//依赖被依赖的子流程的索引
+	//srcStageMask 和srcAccessMask 成员变量用于指定需要等待的管线阶段和子流程将进行的操作类型。
+	//我们需要等待交换链结束对图像的读取才能对图像进行访问操作，也就是等待颜色附件输出这一管线阶段。
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	//dstStageMask 和dstAccessMask 成员变量用于指定需要等待的管线阶段和子流程将进行的操作类型。在这里，我们的设置为等待颜色附着的输出阶段，
+	//子流程将会进行颜色附着的读写操作。这样设置后，图像布局变换直到必要时才会进行：当我们开始写入颜色数据时。
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+	renderPassInfo.dependencyCount = 1;
+	renderPassInfo.pDependencies = &dependency;
 
 	if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS)
 	{
 		throw std::runtime_error("创建渲染pass失败");
 	}
-
-	
-	
 }
 
 
@@ -663,7 +685,7 @@ void VulkanBase::createGraphicsPipeline() {
 	//创建shader阶段，这里确定了shader的类型(frag或vectex)、执行函数
 	VkPipelineShaderStageCreateInfo vertShaderStageInfo = {};
 	vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+	vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;//顶点着色器
 	vertShaderStageInfo.module = vertShader;
 	vertShaderStageInfo.pName = "main";
 	//以下代码可以向shader传递define，这些define一般用于shader内部的分支#if #else #endif
@@ -671,7 +693,7 @@ void VulkanBase::createGraphicsPipeline() {
 
 	VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
 	fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+	fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;//片元着色器
 	fragShaderStageInfo.module = fragShader;
 	fragShaderStageInfo.pName = "main";
 	fragShaderStageInfo.pSpecializationInfo = nullptr;
@@ -861,6 +883,7 @@ VkShaderModule VulkanBase::createShaderModule(const std::vector<char>& code)
 
 #pragma endregion
 
+
 #pragma region 帧缓冲与命令缓冲
 
 
@@ -979,8 +1002,87 @@ void VulkanBase::createCommandBuffer()
 		}
 	}
 
+
 	
 }
+
+#pragma endregion
+
+#pragma region 渲染和显示
+//建立信号量,用于异步操作中的同步信号
+//分别建立图形获取和渲染结束的信号量，一个用于通知开始渲染，另一个用于通知开始显示
+void VulkanBase::createSemaphores()
+{
+	VkSemaphoreCreateInfo semaphoreCreateInfo = {};
+	semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+	VkFenceCreateInfo fenceInfo = {};
+	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+	if (vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS ||
+		vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS ||
+		vkCreateFence(device, &fenceInfo, nullptr, &inFlightFence) != VK_SUCCESS)
+	{
+		throw std::runtime_error("建立信号量失败");
+	}
+
+	
+}
+
+//绘制，每帧调用
+void VulkanBase::drawFrame()
+{
+	vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, std::numeric_limits<uint64_t>::max());
+	vkResetFences(device, 1, &inFlightFence);
+
+	//从交换链获取图片,KHR后缀的都是与交换链相关的操作
+	uint32_t imageIndex;
+	//此操作是异步的，第4、5参数为获取图象完成后通知的对象，这里通知信号量
+	//最后一个参数是读取的图片索引，为交换链图片数组的索引号
+	vkAcquireNextImageKHR(device, swapChain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+	//提交图片到指令缓冲
+	VkSubmitInfo submitInfo = {};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	//要等待的信号量对象
+	VkSemaphore waitSemaphore[] = {imageAvailableSemaphore};
+	//需要等待的管线阶段,这里我们需要写入颜色数据到图像，所以需要等待图像管线到达可以写入颜色附着的管线阶段
+	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+	submitInfo.waitSemaphoreCount = 1;
+	//waitStages 数组中的条目和pWaitSemaphores中相同索引的信号量相对应。
+	submitInfo.pWaitSemaphores = waitSemaphore;
+	submitInfo.pWaitDstStageMask = waitStages;
+	//提交执行的指令缓冲对象
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &commandBuffers[imageIndex];
+	//缓冲指令结束后通知的信号量
+	VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
+	submitInfo.signalSemaphoreCount = 1;
+	submitInfo.pSignalSemaphores = signalSemaphores;
+	// 提交到图形列队，最后一个参数为光栅对象(可选)，用于指令缓冲结束后的光栅化操作，这里我们需要等待信号通知后自定义操作，所以不用传入光栅对象	
+	if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS)
+	{
+		throw std::runtime_error("failed to submit draw command buffer!");
+	}
+	
+	//显示
+	VkPresentInfoKHR presendInfo = {};
+	presendInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+	presendInfo.waitSemaphoreCount = 1;
+	presendInfo.pWaitSemaphores = signalSemaphores;
+
+	VkSwapchainKHR swapChains[] = {swapChain};
+	presendInfo.swapchainCount = 1;
+	presendInfo.pSwapchains = swapChains;
+	presendInfo.pImageIndices = &imageIndex;
+	presendInfo.pResults = nullptr;		//可选，每个交换链的呈现操作是否成功的信息，由于我们只使用了一个交换链，呈现函数的返回值来判断呈现操作是否成功，没有必要使用pResults
+	//显示
+	vkQueuePresentKHR(presentQueue, &presendInfo);
+
+
+}
+
 
 #pragma endregion
 
