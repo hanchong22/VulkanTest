@@ -93,7 +93,11 @@ private:
 	std::vector<VkFence> inFlightFences;
 	//当前渲染的是那一帧
 	size_t currentFrame = 0;
-	
+
+	//顶点数据缓冲对象
+	VkBuffer vertexBuffer;
+	//顶点数据显存区域
+	VkDeviceMemory vertexBufferMemory;
 
 private :
 
@@ -137,7 +141,8 @@ private :
 	void createSyncObjects();
 	//绘制
 	void drawFrame();
-
+	//创建顶点数据
+	void createVertexBuffer();
 
 
 	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
@@ -151,6 +156,8 @@ private :
 	bool checkValidationLayerSupport();
 	//创建shader模块
 	VkShaderModule createShaderModule(const std::vector<char>& code);
+	//查找显存类型
+	uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
 	//校验层回调，在此消息内处理vulkan回调的错误码
 	//使用VKAPI_ATTR 和VKAPI_CALL 定义,这样才能被Vulkan库调用

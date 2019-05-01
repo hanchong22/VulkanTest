@@ -64,6 +64,7 @@ void VulkanBase::initVulkan() {
 	createGraphicsPipeline();	//创建图形管线
 	createFramebuffers();		//创建帧缓冲
 	createCommandPool();		//创建创建命令池
+	createVertexBuffer();		//创建顶点数据缓冲
 	createCommandBuffer();		//建立命令缓冲
 	createSyncObjects();		//建立同步对象
 }
@@ -82,6 +83,10 @@ void VulkanBase::mainLoop() {
 void VulkanBase::cleanup() {	
 
 	cleanupSwapChain();
+
+	//顶点缓冲不依赖交换链
+	vkDestroyBuffer(device, vertexBuffer, nullptr);
+	vkFreeMemory(device, vertexBufferMemory, nullptr);
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
@@ -742,7 +747,7 @@ void VulkanBase::createGraphicsPipeline() {
 	vertShaderStageInfo.module = vertShader;
 	vertShaderStageInfo.pName = "main";
 	//以下代码可以向shader传递define，这些define一般用于shader内部的分支#if #else #endif
-	vertShaderStageInfo.pSpecializationInfo = nullptr;
+	//vertShaderStageInfo.pSpecializationInfo = nullptr;
 
 	//创建fragment shader
 	VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
@@ -751,7 +756,7 @@ void VulkanBase::createGraphicsPipeline() {
 	fragShaderStageInfo.module = fragShader;
 	fragShaderStageInfo.pName = "main";
 	//向shader传递的预编译定义
-	fragShaderStageInfo.pSpecializationInfo = nullptr;
+	//fragShaderStageInfo.pSpecializationInfo = nullptr;
 
 	VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo ,fragShaderStageInfo };
 
@@ -760,10 +765,14 @@ void VulkanBase::createGraphicsPipeline() {
 	//todo::读取网格(mesh)文件传入，此demo中没有读取mesh文件，是因为在shader代码中定义了顶点数据。
 	VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 	vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT;
-	vertexInputInfo.vertexBindingDescriptionCount = 0;
-	vertexInputInfo.pVertexBindingDescriptions = nullptr;
-	vertexInputInfo.vertexAttributeDescriptionCount = 0;
-	vertexInputInfo.pVertexAttributeDescriptions = nullptr;
+
+	auto bindingDescription = Vertex::getBindingDescription();
+	auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
+	vertexInputInfo.vertexBindingDescriptionCount = 1;
+	vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+	vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+	vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
 	//输入Assembly，即顶点数据类型
 	//Assembly用于指定顶点数据定义了哪种类型的几何图元，以及是否启用几何图元重复利用
@@ -1022,7 +1031,7 @@ void VulkanBase::createCommandBuffer()
 		//VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT：这是一个只在一个渲染流程内使用的辅助命令缓冲。
 		//VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT：在命令缓冲等待执行时，仍然可以提交这一命令缓冲。
 		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;	//这使得我们可以在上一帧还未结束渲染时，提交下一帧的渲染指令
-		beginInfo.pInheritanceInfo = nullptr;							//可选
+		//beginInfo.pInheritanceInfo = nullptr;							//可选
 
 		if (vkBeginCommandBuffer(commandBuffers[i], &beginInfo) != VK_SUCCESS)
 		{
@@ -1038,23 +1047,30 @@ void VulkanBase::createCommandBuffer()
 		renderPassInfo.renderArea.extent = swapChainExtent;
 
 		//使用完全不透明的黑色作为清除值
-		VkClearValue clearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+		VkClearValue clearColor = { 0.1f, 0.2f, 0.5f, 1.0f };
 		renderPassInfo.clearValueCount = 1;
 		renderPassInfo.pClearValues = &clearColor;
 		//VK_SUBPASS_CONTENTS_INLINE：所有要执行的指令都在主要指令缓冲中，没有辅助指令缓冲需要执行
 		//VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS：有来自辅助指令缓冲的指令需要执行
 		vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+		
+		{
+			//绑定图形管线
+			//第二个参数于指定管线对象是图形管线还是计算管线,VK_PIPELINE_BIND_POINT_GRAPHICS表示是图形管线
+			vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);			
 
-		//绑定图形管线
-		//第二个参数于指定管线对象是图形管线还是计算管线,VK_PIPELINE_BIND_POINT_GRAPHICS表示是图形管线
-		vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+			//绑定顶点缓冲
+			VkBuffer vertexBuffers[] = { vertexBuffer };
+			VkDeviceSize offsets[] = { 0 };
+			vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
 
-		//调用指令进行三角形的绘制操作
-		//vertexCount：尽管这里我们没有使用顶点缓冲，但仍然需要指定三个顶点用于三角形的绘制
-		//instanceCount：用于实例渲染，为1 时表示不进行实例渲染。
-		//firstVertex：用于定义着色器变量gl_VertexIndex 的值
-		//firstInstance：用于定义着色器变量gl_InstanceIndex 的值
-		vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
+			//调用指令进行模型的绘制操作
+			//vertexCount：顶点数
+			//instanceCount：用于实例渲染，为1 时表示不进行实例渲染。
+			//firstVertex：用于定义着色器变量gl_VertexIndex 的值
+			//firstInstance：用于定义着色器变量gl_InstanceIndex 的值
+			vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+		}
 
 		//结束渲染流程
 		vkCmdEndRenderPass(commandBuffers[i]);
@@ -1176,6 +1192,84 @@ void VulkanBase::drawFrame()
 }
 
 
+#pragma endregion
+
+
+#pragma region 资源数据
+//读取网格模型、建立顶点数据
+void VulkanBase::createVertexBuffer()
+{
+	VkBufferCreateInfo bufferInfo = {};
+	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferInfo.size = sizeof(vertices[0]) * vertices.size();
+	//指定顶点数据的使用目的，可以用位运算来指定多个。
+	bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+	//指定队列族的共享模式，这里只有一个队列，所以为独占模式。
+	bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	//顶点数据内存中的稀疏程度
+	//bufferInfo.flags = 0;
+
+	if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) 
+	{
+		throw std::runtime_error("创建顶点数据缓冲失");
+	}
+
+	//请求内存
+	VkMemoryRequirements memRequirements;
+	//返回的数据
+	//需要的内存尺寸
+	//memRequirements.size
+	//内存区域开始位置
+	//memRequirements.alignment
+	//指示适合的内存类型的位域
+	//memRequirements.memoryTypeBits
+	vkGetBufferMemoryRequirements(device, vertexBuffer, &memRequirements);
+	
+	//分配内存
+	VkMemoryAllocateInfo allocInfo = {};
+	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	allocInfo.allocationSize = memRequirements.size;
+	//查找物理设备上支持的显存类型
+	//需要位域满足VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT（从cpu写入数据）和 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT （保证显存可见的一致性，保证在各gpu内核中的数据一至）
+	allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+	if (vkAllocateMemory(device, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS)
+	{
+		throw std::runtime_error("分配顶点显存失败");
+	}
+
+	//绑定显存区域与缓冲对象
+	//第四个参数的偏移值，需要能被memRequirements.alignment整除
+	vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+
+	void *data;
+	//内存<->显存映射,将VKDeviceMemory映射到CPU内存
+	//offet和size用来指定的内存偏移量和大小，还有一个特殊值VK_WHOLE_SIZE 可以用来映射整个申请的内存
+	//flags为预留的标记，暂未用到，必须填0
+	//data为内存映射后的地址
+	vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);
+		//将cpu内存数据复制到映射地址中
+		memcpy(data, vertices.data(), (size_t)bufferInfo.size);
+	//结束内存<->显存的映射
+	vkUnmapMemory(device, vertexBufferMemory);
+	//虽然在代码上完成了内存到显存的复制，但所有gpu内核中不一定立即可见，也不一定同时可见，因为现代处理器都有缓存这一机制。前面选择显存类型时要求有VK_MEMORY_PROPERTY_HOST_COHERENT_BIT正是为了避免各内核数据不一至。
+
+}
+
+//先择合适的显存类型
+uint32_t VulkanBase::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties)
+{
+	VkPhysicalDeviceMemoryProperties memProperties;
+	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+	//遍历数组，查找缓冲可用的内存类型
+	//相应位域为1	
+	for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+		if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+			return i;
+		}
+	}
+
+	throw std::runtime_error("未找到合适的显存类型");
+}
 #pragma endregion
 
 
