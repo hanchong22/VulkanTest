@@ -23,6 +23,8 @@ struct SwapChainSupportDetails {
 	std::vector<VkPresentModeKHR> presentModes;
 };
 
+
+
 //定义顶点数据结构，使用了glm库中的数据类型，因为可以完全兼容shader中的数据类型
 
 struct Vertex {
@@ -55,13 +57,17 @@ struct Vertex {
 	}
 };
 
-//定义一个网格模型
+//定义一个网格模型的顶点数据
 const std::vector<Vertex> vertices = {
-	{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-	{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-	{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+	{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+	{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+	{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+	{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
 };
-
+//定义一个网格模型的索引数据
+const std::vector<uint16_t> indices = {
+	0, 1, 2, 2, 3, 0
+};
 
 //工具：读取文件内容
 static std::vector<char> readFile(const std::string& fileName)
@@ -84,4 +90,42 @@ static std::vector<char> readFile(const std::string& fileName)
 
 	fl->close();
 	return buffer;
+}
+
+
+
+
+//校验层
+const std::vector<const char*> validationLayers = {
+	"VK_LAYER_LUNARG_standard_validation"
+};
+
+const std::vector<const char*> deviceExtensions = {
+	VK_KHR_SWAPCHAIN_EXTENSION_NAME
+};
+
+
+
+//校验层回调，在此消息内处理vulkan回调的错误码
+	//使用VKAPI_ATTR 和VKAPI_CALL 定义,这样才能被Vulkan库调用
+	// messageSeverity 为消息级别，它可以这些值 ：
+	//		VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT：诊断信息
+	//		VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT：	资源创建之类的信息
+	//		VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT：		警告信息
+	//		VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT：		不合法和可能造成崩溃的操作信息
+	//messageType 参数可以是下面这些值：
+	//		VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT：	发生了一些与规范和性能无关的事件
+	//		VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT：	出现了违反规范的情况或发生了一个可能的错误
+	//		VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT：	进行了可能影响Vulkan 性能的行为
+	//pCallbackData参数是一个指向VkDebugUtilsMessengerCallbackDataEXT结构体的指针,包含：pMessage：一个以null 结尾的包含调试信息的字符串；pObjects：存储有和消息相关的Vulkan 对象句柄的数组；objectCount：数组中的对象个数
+	//pUserData是一个指向了我们设置回调函数时，传递的数据的指针
+	//返回了一个布尔值，用来表示引发校验层处理的Vulkan API调用是否被中断。如果返回值为true，对应Vulkan API 调用就会返回VK_ERROR_VALIDATION_FAILED_EXT 错误代码。通常，只在测试校验层本身时会返回true，其余情况下，回调函数应该返回VK_FALSE。
+static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
+	std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+	if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
+	{
+		//todo::此消息为重要消息，需要向上层显示
+	}
+
+	return VK_FALSE;
 }

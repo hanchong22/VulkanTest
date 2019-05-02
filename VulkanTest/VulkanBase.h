@@ -98,6 +98,10 @@ private:
 	VkBuffer vertexBuffer;
 	//顶点数据显存区域
 	VkDeviceMemory vertexBufferMemory;
+	//索引缓冲对象
+	VkBuffer indexBuffer;
+	//索引缓冲内存区域
+	VkDeviceMemory indexBufferMemory;
 
 private :
 
@@ -143,6 +147,8 @@ private :
 	void drawFrame();
 	//创建顶点数据
 	void createVertexBuffer();
+	//创建索引数据
+	void createIndexBuffer();
 
 
 	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
@@ -158,28 +164,9 @@ private :
 	VkShaderModule createShaderModule(const std::vector<char>& code);
 	//查找显存类型
 	uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
-	//校验层回调，在此消息内处理vulkan回调的错误码
-	//使用VKAPI_ATTR 和VKAPI_CALL 定义,这样才能被Vulkan库调用
-	// messageSeverity 为消息级别，它可以这些值 ：
-	//		VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT：诊断信息
-	//		VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT：	资源创建之类的信息
-	//		VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT：		警告信息
-	//		VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT：		不合法和可能造成崩溃的操作信息
-	//messageType 参数可以是下面这些值：
-	//		VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT：	发生了一些与规范和性能无关的事件
-	//		VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT：	出现了违反规范的情况或发生了一个可能的错误
-	//		VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT：	进行了可能影响Vulkan 性能的行为
-	//pCallbackData参数是一个指向VkDebugUtilsMessengerCallbackDataEXT结构体的指针,包含：pMessage：一个以null 结尾的包含调试信息的字符串；pObjects：存储有和消息相关的Vulkan 对象句柄的数组；objectCount：数组中的对象个数
-	//pUserData是一个指向了我们设置回调函数时，传递的数据的指针
-	//返回了一个布尔值，用来表示引发校验层处理的Vulkan API调用是否被中断。如果返回值为true，对应Vulkan API 调用就会返回VK_ERROR_VALIDATION_FAILED_EXT 错误代码。通常，只在测试校验层本身时会返回true，其余情况下，回调函数应该返回VK_FALSE。
-	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
-		std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
-		if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
-		{
-			//todo::此消息为重要消息，需要向上层显示
-		}
-
-		return VK_FALSE;
-	}
+	//创建buffer
+	void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
+	//复制缓存数据
+	void copyBUffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
+	
 };

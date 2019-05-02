@@ -9,14 +9,6 @@ const bool enableValidationLayers = true;
 
 
 
-//校验层
-const std::vector<const char*> validationLayers = {
-	"VK_LAYER_LUNARG_standard_validation"
-};
-
-const std::vector<const char*> deviceExtensions = {
-	VK_KHR_SWAPCHAIN_EXTENSION_NAME
-};
 
 //窗口大小改变时的回调
 static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
@@ -65,6 +57,7 @@ void VulkanBase::initVulkan() {
 	createFramebuffers();		//创建帧缓冲
 	createCommandPool();		//创建创建命令池
 	createVertexBuffer();		//创建顶点数据缓冲
+	createIndexBuffer();		//创建索引数据缓冲
 	createCommandBuffer();		//建立命令缓冲
 	createSyncObjects();		//建立同步对象
 }
@@ -87,6 +80,8 @@ void VulkanBase::cleanup() {
 	//顶点缓冲不依赖交换链
 	vkDestroyBuffer(device, vertexBuffer, nullptr);
 	vkFreeMemory(device, vertexBufferMemory, nullptr);
+	vkDestroyBuffer(device, indexBuffer, nullptr);
+	vkFreeMemory(device, indexBufferMemory, nullptr);
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
@@ -1011,8 +1006,8 @@ void VulkanBase::createCommandBuffer()
 	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 	allocInfo.commandPool = commandPool;
 	//level用于指定分配的指令缓冲对象是主要指令缓冲对象还是辅助指令缓冲对象
-	//VK_COMMAND_BUFFER_LEVEL_PRIMARY：可以被提交到队列进行执行，但不能被其它指令缓冲对象调用
-	//VK_COMMAND_BUFFER_LEVEL_SECONDARY：不能直接被提交到队列进行执行，但可以被主要指令缓冲对象调用执行。
+	//VK_COMMAND_BUFFER_LEVEL_PRIMARY：主执行指令，可以被提交到队列进行执行，但不能被其它指令缓冲对象调用
+	//VK_COMMAND_BUFFER_LEVEL_SECONDARY：辅助指令，不能直接被提交到队列进行执行，但可以被主要指令缓冲对象调用执行。
 	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 	allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
 
@@ -1027,55 +1022,61 @@ void VulkanBase::createCommandBuffer()
 		VkCommandBufferBeginInfo beginInfo = {};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		//怎样使用命令缓冲
-		//VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT：命令缓冲在执行一次后，就被用来记录新的命令
-		//VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT：这是一个只在一个渲染流程内使用的辅助命令缓冲。
-		//VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT：在命令缓冲等待执行时，仍然可以提交这一命令缓冲。
+		//VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT：仅提交一次
+		//VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT：只在一个渲染流程内使用的辅助命令缓冲。
+		//VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT：在命令缓冲等待执行时，同时可以提交这一命令缓冲。
 		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;	//这使得我们可以在上一帧还未结束渲染时，提交下一帧的渲染指令
 		//beginInfo.pInheritanceInfo = nullptr;							//可选
 
+		//开始录制命令
 		if (vkBeginCommandBuffer(commandBuffers[i], &beginInfo) != VK_SUCCESS)
 		{
 			throw std::runtime_error("开始录制命令缓冲失败");
 		}
-
-		//设置开始渲染pass
-		VkRenderPassBeginInfo renderPassInfo = {};
-		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-		renderPassInfo.renderPass = renderPass;
-		renderPassInfo.framebuffer = swapChainFrameBuffers[i];
-		renderPassInfo.renderArea.offset = { 0, 0 };
-		renderPassInfo.renderArea.extent = swapChainExtent;
-
-		//使用完全不透明的黑色作为清除值
-		VkClearValue clearColor = { 0.1f, 0.2f, 0.5f, 1.0f };
-		renderPassInfo.clearValueCount = 1;
-		renderPassInfo.pClearValues = &clearColor;
-		//VK_SUBPASS_CONTENTS_INLINE：所有要执行的指令都在主要指令缓冲中，没有辅助指令缓冲需要执行
-		//VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS：有来自辅助指令缓冲的指令需要执行
-		vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-		
 		{
-			//绑定图形管线
-			//第二个参数于指定管线对象是图形管线还是计算管线,VK_PIPELINE_BIND_POINT_GRAPHICS表示是图形管线
-			vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);			
+			//设置开始渲染pass
+			VkRenderPassBeginInfo renderPassInfo = {};
+			renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+			renderPassInfo.renderPass = renderPass;
+			renderPassInfo.framebuffer = swapChainFrameBuffers[i];
+			renderPassInfo.renderArea.offset = { 0, 0 };
+			renderPassInfo.renderArea.extent = swapChainExtent;
 
-			//绑定顶点缓冲
-			VkBuffer vertexBuffers[] = { vertexBuffer };
-			VkDeviceSize offsets[] = { 0 };
-			vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
+			//使用完全不透明的黑色作为清除值
+			VkClearValue clearColor = { 0.1f, 0.2f, 0.5f, 1.0f };
+			renderPassInfo.clearValueCount = 1;
+			renderPassInfo.pClearValues = &clearColor;
+			//VK_SUBPASS_CONTENTS_INLINE：所有要执行的指令都在主要指令缓冲中，没有辅助指令缓冲需要执行
+			//VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS：有来自辅助指令缓冲的指令需要执行
+			vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-			//调用指令进行模型的绘制操作
-			//vertexCount：顶点数
-			//instanceCount：用于实例渲染，为1 时表示不进行实例渲染。
-			//firstVertex：用于定义着色器变量gl_VertexIndex 的值
-			//firstInstance：用于定义着色器变量gl_InstanceIndex 的值
-			vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+			{
+				//绑定图形管线
+				//第二个参数于指定管线对象是图形管线还是计算管线,VK_PIPELINE_BIND_POINT_GRAPHICS表示是图形管线
+				vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+				//绑定顶点缓冲
+				VkBuffer vertexBuffers[] = { vertexBuffer };
+				VkDeviceSize offsets[] = { 0 };
+				vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
+
+				//绑定索引缓冲
+				vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+				//DrawCall命令
+				//vertexCount：顶点数
+				//instanceCount：用于实例渲染，为1 时表示不进行实例渲染。
+				//firstVertex：用于定义着色器变量gl_VertexIndex 的值
+				//firstInstance：用于定义着色器变量gl_InstanceIndex 的值
+				//vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+				//绘制带索引的mesh
+				vkCmdDrawIndexed(commandBuffers[i], static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+			}
+
+			//结束渲染流程
+			vkCmdEndRenderPass(commandBuffers[i]);
 		}
-
-		//结束渲染流程
-		vkCmdEndRenderPass(commandBuffers[i]);
-
-		//结束记录指令
+		//结束录制命令
 		if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
 			throw std::runtime_error("录制命令缓冲失败");
 		}
@@ -1195,26 +1196,108 @@ void VulkanBase::drawFrame()
 #pragma endregion
 
 
-#pragma region 资源数据
+#pragma region 资源数据与GPU缓存
 //读取网格模型、建立顶点数据
 void VulkanBase::createVertexBuffer()
 {
+	VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();;
+
+	//临时缓存(gpu)
+	//临时缓存将采用CPU可以访问的缓存类型，将cpu 内存复制到此缓存中
+	VkBuffer stagingBuffer;
+	VkDeviceMemory stagingBufferMemory;
+	createBuffer(bufferSize,		
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,	//传输来源
+		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,////需要位域满足VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT（从cpu写入数据）和 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT （保证显存可见的一致性，保证在各gpu内核中的数据一至）
+		stagingBuffer,
+		stagingBufferMemory
+	);
+
+	void *data;
+	//内存<->显存映射,将VKDeviceMemory映射到CPU内存
+	//offet和size用来指定的内存偏移量和大小，还有一个特殊值VK_WHOLE_SIZE 可以用来映射整个申请的内存
+	//flags为预留的标记，暂未用到，必须填0
+	//data为内存映射后的地址
+	//虽然在代码上完成了内存到显存的复制，但所有gpu内核中不一定立即可见，也不一定同时可见，因为现代处理器都有缓存这一机制。前面选择显存类型时要求有VK_MEMORY_PROPERTY_HOST_COHERENT_BIT正是为了避免各内核数据不一至。
+	vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+	{
+		//将cpu内存数据复制到映射地址中
+		memcpy(data, vertices.data(), (size_t)bufferSize);
+	}
+	//结束内存<->显存的映射
+	vkUnmapMemory(device, stagingBufferMemory);
+
+	//正式缓存(gpu)，CPU无法访问，但GPU访问的性能更好
+	createBuffer(bufferSize,
+		//指定顶点数据的使用目的，可以用位运算来指定多个。
+		//VK_BUFFER_USAGE_TRANSFER_SRC_BIT 用于内存传输操作的数据来源
+		//VK_BUFFER_USAGE_TRANSFER_DST_BIT 用于内存传输操作的数据目标
+		VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,//传输目的与顶点数
+		//类型为设备内部内存，CPU无法访问，但GPU访问的性能更好
+		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+		vertexBuffer,
+		vertexBufferMemory);
+
+	//复制临时缓存到正式缓存（通过GPU的命令缓冲）
+	copyBUffer(stagingBuffer, vertexBuffer, bufferSize);
+
+	//清除临时缓冲,copyBUffer是同步执行的，不是采用光栅对象或信号量的异步操作，到这里时已经完成了复制命令的提交了
+	vkDestroyBuffer(device, stagingBuffer, nullptr);
+	vkFreeMemory(device, stagingBufferMemory, nullptr);
+
+}
+
+//索引数据
+void VulkanBase::createIndexBuffer()
+{
+	VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+	//临时缓冲
+	VkBuffer tempBuffer;
+	VkDeviceMemory tempBufferMemory;
+	createBuffer(bufferSize, 
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,//使用目的：传输数据源
+		//需要位域满足VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT（从cpu写入数据）和 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT （保证显存可见的一致性，保证在各gpu内核中的数据一至）
+		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+		tempBuffer, tempBufferMemory
+	);
+
+	//CPU到临时缓冲的内存映射
+	void *data;
+	vkMapMemory(device, tempBufferMemory, 0, bufferSize, 0, &data);
+	{
+		memcpy(data, indices.data(), (size_t)bufferSize);
+	}
+	vkUnmapMemory(device, tempBufferMemory);
+
+	//创建正式缓冲
+	createBuffer(bufferSize,
+		//使用目的，传输目标与索引数据
+		VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+		indexBuffer,indexBufferMemory
+	);
+
+	copyBUffer(tempBuffer, indexBuffer, bufferSize);
+
+	vkDestroyBuffer(device, tempBuffer, nullptr);
+	vkFreeMemory(device, tempBufferMemory, nullptr);
+}
+
+//工具：建立缓冲
+void VulkanBase::createBuffer( VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
 	VkBufferCreateInfo bufferInfo = {};
 	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	bufferInfo.size = sizeof(vertices[0]) * vertices.size();
+	bufferInfo.size = size;
 	//指定顶点数据的使用目的，可以用位运算来指定多个。
-	bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+	bufferInfo.usage = usage;
 	//指定队列族的共享模式，这里只有一个队列，所以为独占模式。
 	bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	//顶点数据内存中的稀疏程度
-	//bufferInfo.flags = 0;
 
-	if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) 
-	{
-		throw std::runtime_error("创建顶点数据缓冲失");
+	if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create buffer!");
 	}
 
-	//请求内存
 	VkMemoryRequirements memRequirements;
 	//返回的数据
 	//需要的内存尺寸
@@ -1223,39 +1306,68 @@ void VulkanBase::createVertexBuffer()
 	//memRequirements.alignment
 	//指示适合的内存类型的位域
 	//memRequirements.memoryTypeBits
-	vkGetBufferMemoryRequirements(device, vertexBuffer, &memRequirements);
-	
+	vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
+
 	//分配内存
+	//todo::显卡对分配内存的调用次数是有限制的，一般做法是一次性创建一个较大的内存，然后在应用程序中再自行分配给每个对象。也可使用GPUOpen的VulkanMemoryAllocator内存分配器
+	//本demo中暂时使用vkAllocateMemory，是不能用于实际项目中的
 	VkMemoryAllocateInfo allocInfo = {};
 	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-	allocInfo.allocationSize = memRequirements.size;
+	allocInfo.allocationSize = memRequirements.size;	
 	//查找物理设备上支持的显存类型
-	//需要位域满足VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT（从cpu写入数据）和 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT （保证显存可见的一致性，保证在各gpu内核中的数据一至）
-	allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-	if (vkAllocateMemory(device, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS)
-	{
-		throw std::runtime_error("分配顶点显存失败");
-	}
+	allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
 
+	if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+		throw std::runtime_error("failed to allocate buffer memory!");
+	}
 	//绑定显存区域与缓冲对象
 	//第四个参数的偏移值，需要能被memRequirements.alignment整除
-	vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+	vkBindBufferMemory(device, buffer, bufferMemory, 0);
+}
+//工具：复制缓存数据，通过命令缓冲
+void VulkanBase::copyBUffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
+{
+	//创建命令缓冲
 
-	void *data;
-	//内存<->显存映射,将VKDeviceMemory映射到CPU内存
-	//offet和size用来指定的内存偏移量和大小，还有一个特殊值VK_WHOLE_SIZE 可以用来映射整个申请的内存
-	//flags为预留的标记，暂未用到，必须填0
-	//data为内存映射后的地址
-	vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);
-		//将cpu内存数据复制到映射地址中
-		memcpy(data, vertices.data(), (size_t)bufferInfo.size);
-	//结束内存<->显存的映射
-	vkUnmapMemory(device, vertexBufferMemory);
-	//虽然在代码上完成了内存到显存的复制，但所有gpu内核中不一定立即可见，也不一定同时可见，因为现代处理器都有缓存这一机制。前面选择显存类型时要求有VK_MEMORY_PROPERTY_HOST_COHERENT_BIT正是为了避免各内核数据不一至。
+	VkCommandBufferAllocateInfo allocInfo = {};
+	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;//类型为主执行指令
+	allocInfo.commandPool = commandPool;
+	allocInfo.commandBufferCount = 1;
 
+	VkCommandBuffer commandBuffer;
+	vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+	//录制命令
+
+	VkCommandBufferBeginInfo beginInfo = {};
+	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	//仅提交一次,命令只需执行一次
+	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	vkBeginCommandBuffer(commandBuffer, &beginInfo);
+	{
+		VkBufferCopy copyRegion = {};
+		copyRegion.srcOffset = 0;
+		copyRegion.dstOffset = 0;
+		copyRegion.size = size;
+		vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+	}
+	vkEndCommandBuffer(commandBuffer);
+
+	//提交命令缓冲到图形队列
+	VkSubmitInfo submitInfo = {};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &commandBuffer;
+	//光栅对象对空，无需异步等待
+	vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+	//等待操作完成，与光栅对象fence不一样，由于仅需执行一次，这里用同步操作就行了
+	vkQueueWaitIdle(graphicsQueue);
+	//销毁命令缓冲对象
+	vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
 }
 
-//先择合适的显存类型
+//工具：选择合适的显存类型
 uint32_t VulkanBase::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties)
 {
 	VkPhysicalDeviceMemoryProperties memProperties;
