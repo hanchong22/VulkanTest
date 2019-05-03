@@ -53,11 +53,15 @@ void VulkanBase::initVulkan() {
 	createSwapChain();		//创建交换链
 	createImageViews();		//创建交换链图像视图
 	createRenderPass();		//创建渲染pass
+	createDescriptorSetLayout();	//创建管线部局描述符
 	createGraphicsPipeline();	//创建图形管线
 	createFramebuffers();		//创建帧缓冲
 	createCommandPool();		//创建创建命令池
 	createVertexBuffer();		//创建顶点数据缓冲
 	createIndexBuffer();		//创建索引数据缓冲
+	createUniformBuffers();		//创建unifrom缓冲
+	createDescriptorPool();		//创建描述符池
+	createDescriptorSets();		//创建描述会集
 	createCommandBuffer();		//建立命令缓冲
 	createSyncObjects();		//建立同步对象
 }
@@ -82,6 +86,15 @@ void VulkanBase::cleanup() {
 	vkFreeMemory(device, vertexBufferMemory, nullptr);
 	vkDestroyBuffer(device, indexBuffer, nullptr);
 	vkFreeMemory(device, indexBufferMemory, nullptr);
+
+	vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+	vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+
+	for (size_t i = 0; i < swapChainImages.size(); ++i)
+	{
+		vkDestroyBuffer(device, uniformBuffers[i], nullptr);
+		vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+	}
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
 	{
@@ -825,7 +838,8 @@ void VulkanBase::createGraphicsPipeline() {
 	//cullMode指定使用的表面剔除类型,可以通过它禁用表面剔除，剔除背面，剔除正面，以及剔除双面
 	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
 	//frontFace于指定顺时针的顶点序是正面，还是逆时针的顶点序是正面
-	rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+	//rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+	rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 	rasterizer.depthBiasEnable = VK_FALSE;
 	rasterizer.depthBiasConstantFactor = 0.0f;	//可选
 	rasterizer.depthBiasClamp = 0.0f;			//可选
@@ -887,8 +901,8 @@ void VulkanBase::createGraphicsPipeline() {
 	//管理部局可以用于设置shader中的uniform变量	
 	VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 	pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pipelineLayoutInfo.setLayoutCount = 0;						//可选
-	pipelineLayoutInfo.pSetLayouts = nullptr;					//可选
+	pipelineLayoutInfo.setLayoutCount = 1;						//管线部局数量
+	pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;		//管线部局
 	pipelineLayoutInfo.pushConstantRangeCount = 0;				//可选
 	pipelineLayoutInfo.pPushConstantRanges = nullptr;			//可选
 
@@ -946,6 +960,32 @@ VkShaderModule VulkanBase::createShaderModule(const std::vector<char>& code)
 	}
 
 	return shaderModule;
+}
+
+//创建管线部局描述符
+void VulkanBase::createDescriptorSetLayout()
+{
+	//描述符绑定
+	VkDescriptorSetLayoutBinding uboLayoutBinding = {};
+	uboLayoutBinding.binding = 0;
+	//定义描述符类型，这里定义用于向shader传递uniform buffer.
+	uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	//只传递1个unifrom对象
+	uboLayoutBinding.descriptorCount = 1;
+	//shader阶段为顶点着色器
+	uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	//图像采样相关描述符
+	uboLayoutBinding.pImmutableSamplers = nullptr;//可选
+
+	VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	layoutInfo.bindingCount = 1;
+	layoutInfo.pBindings = &uboLayoutBinding;
+
+	if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
+	{
+		throw std::runtime_error("创建管线描述符失败");
+	}
 }
 
 #pragma endregion
@@ -1063,6 +1103,17 @@ void VulkanBase::createCommandBuffer()
 				//绑定索引缓冲
 				vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
+				//绑定描述符集				
+				vkCmdBindDescriptorSets(commandBuffers[i],
+					VK_PIPELINE_BIND_POINT_GRAPHICS, //描述符集并不是图形管线所独有的，需要指定要绑定的是图形管线还是计算管线
+					pipelineLayout, 
+					0,									//需要级定的描述符集的第一个元素索引
+					1,									//需要级定的描述符集个数
+					&descriptorSets[i],					//描述符集数组
+					0,									//指定动态描述符的数组偏移
+					nullptr
+				);
+
 				//DrawCall命令
 				//vertexCount：顶点数
 				//instanceCount：用于实例渲染，为1 时表示不进行实例渲染。
@@ -1119,6 +1170,96 @@ void VulkanBase::createSyncObjects()
 	
 }
 
+//创建管线布局的unifrom数据
+void VulkanBase::createUniformBuffers()
+{
+	VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+	uniformBuffers.resize(swapChainImages.size());
+	uniformBuffersMemory.resize(swapChainImages.size());
+	for (size_t i = 0; i < swapChainImages.size(); i++) {
+		createBuffer(bufferSize, 
+			//定义用途：Uniform buffer
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+			//VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT（从cpu写入数据）和 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT （保证显存可见的一致性，保证在各gpu内核中的数据一至）
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+			uniformBuffers[i], uniformBuffersMemory[i]);
+	}
+}
+
+//创建描述符池
+void VulkanBase::createDescriptorPool()
+{
+	//描述符池size定义
+	VkDescriptorPoolSize poolSize = {};
+	poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	poolSize.descriptorCount = static_cast<uint32_t>(swapChainImages.size());
+
+	VkDescriptorPoolCreateInfo poolInfo = {};
+	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	//描述符池size的个数
+	poolInfo.poolSizeCount = 1;
+	////描述符池size对象
+	poolInfo.pPoolSizes = &poolSize;
+	//最大的描述符集个数
+	poolInfo.maxSets = static_cast<uint32_t>(swapChainImages.size());
+	//是否可以被清除掉
+	//poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+
+	if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS)
+	{
+		throw std::runtime_error("创建描述符池失败");
+	}
+
+
+}
+
+//创建描述符集并写入数据
+void VulkanBase::createDescriptorSets()
+{
+	std::vector<VkDescriptorSetLayout> layouts(swapChainImages.size(), descriptorSetLayout);
+
+	VkDescriptorSetAllocateInfo allocInfo = {};
+	allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	allocInfo.descriptorPool = descriptorPool;
+	//描述符布局对象个数要匹配描述符集对象个数
+	allocInfo.descriptorSetCount = static_cast<uint32_t>(swapChainImages.size());
+	allocInfo.pSetLayouts = layouts.data();
+
+	descriptorSets.resize(swapChainImages.size());
+	//创建描述符集，描述符集会在描述符池Destroy时自动清除，所以不用显式的调用Destroy
+	if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
+		throw std::runtime_error("创建描述符集失败");
+	}
+
+	for (size_t i = 0; i < swapChainImages.size(); i++) {
+		//配置描述符引用的缓冲对象
+		VkDescriptorBufferInfo bufferInfo = {};
+		bufferInfo.buffer = uniformBuffers[i];
+		bufferInfo.offset = 0;
+		//缓存区域，如果使用VK_WHOLE_SIZE则表示使用整个缓冲
+		bufferInfo.range = sizeof(UniformBufferObject);
+
+		//写入数据到描述符集
+		VkWriteDescriptorSet descriptorWrite = {};
+		descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		//要写入的描述符集对象
+		descriptorWrite.dstSet = descriptorSets[i];
+		//缓存绑定索引，因为dstSet不是精数组，所以下标0表示第一个描述符集对象
+		descriptorWrite.dstBinding = 0;
+		descriptorWrite.dstArrayElement = 0;
+		//描述符类型：uniform缓冲
+		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		//描述符集数量
+		descriptorWrite.descriptorCount = 1;
+		//描述符集需要写入缓存对象
+		descriptorWrite.pBufferInfo = &bufferInfo;
+		//描述符集需要写入的图像数据
+		descriptorWrite.pImageInfo = nullptr;
+		//执行写入
+		vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+	}
+}
+
 //绘制，每帧调用
 void VulkanBase::drawFrame()
 {
@@ -1141,6 +1282,9 @@ void VulkanBase::drawFrame()
 	else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
 		throw std::runtime_error("failed to acquire swap chain image!");
 	}
+
+	//更新uniform数据
+	updateUniformBuffer(imageIndex);
 
 	//提交图片到指令缓冲
 	VkSubmitInfo submitInfo = {};
@@ -1192,6 +1336,34 @@ void VulkanBase::drawFrame()
 	currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
+//更新uniform数据
+void VulkanBase::updateUniformBuffer(uint32_t currentImage)
+{
+	static auto startTime = std::chrono::high_resolution_clock::now();
+
+	auto currentTime = std::chrono::high_resolution_clock::now();
+	float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+	//模型的渲染设计成绕Z 轴渲染time 弧度
+	UniformBufferObject ubo = {};
+	//glm::rotate 函数以矩阵，旋转角度和旋转轴作为参数,glm::mat4(1.0f)为构造的单位矩阵， time * glm::radians(90.0f) 完成每秒旋转90 度的操作。
+	ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	//glm::lookAt 函数以观察者位置，视点坐标和向上向量为参数生成视图变换矩阵
+	ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	//glm::perspective 函数以视域的垂直角度，视域的宽高比以及近平面和远平面距离为参数生成透视变换矩阵。
+	//需要注意在窗口大小改变后应该使用当前交换链范围来重新计算宽高比
+	ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
+	//GLM 库最初是为OpenGL 设计的，它的裁剪坐标的Y 轴和Vulkan是相反的。将投影矩阵的Y 轴缩放系数符号取反来使投影矩阵和Vulkan 的要求一致。
+	ubo.proj[1][1] *= -1;
+
+	//复制数据到当前帧对应的uniform 缓冲
+	void* data;
+	vkMapMemory(device, uniformBuffersMemory[currentImage], 0, sizeof(ubo), 0, &data);
+	{
+		memcpy(data, &ubo, sizeof(ubo));
+	}
+	vkUnmapMemory(device, uniformBuffersMemory[currentImage]);
+}
 
 #pragma endregion
 

@@ -5,6 +5,8 @@
 #include <memory>
 #include <fstream>
 #include <glm/glm.hpp>		//线性代数库
+#include <glm/gtc/matrix_transform.hpp>	//变化矩阵库
+#include <chrono>			//计时
 
 //可并行处理的帧
 const int MAX_FRAMES_IN_FLIGHT = 2;
@@ -26,7 +28,7 @@ struct SwapChainSupportDetails {
 
 
 //定义顶点数据结构，使用了glm库中的数据类型，因为可以完全兼容shader中的数据类型
-
+//glm库中的数据类型可以放心的使用memcpy来复制数据到GPU
 struct Vertex {
 	glm::vec2 pos;
 	glm::vec3 color;
@@ -67,6 +69,14 @@ const std::vector<Vertex> vertices = {
 //定义一个网格模型的索引数据
 const std::vector<uint16_t> indices = {
 	0, 1, 2, 2, 3, 0
+};
+
+//定义一个要传入shader uniform的结构体
+//使用glm中定义的类型，是为了和shader中的类型保持一至，可以放心的使用memcpy来复制数据到GPU
+struct UniformBufferObject {
+	glm::mat4 model;
+	glm::mat4 view;
+	glm::mat4 proj;
 };
 
 //工具：读取文件内容

@@ -75,6 +75,8 @@ private:
 	VkRenderPass renderPass;
 	//管线部局，用于向shader传递uniform变量
 	VkPipelineLayout pipelineLayout;
+	//管线部局描述符
+	VkDescriptorSetLayout descriptorSetLayout;
 	//图形渲染管线
 	VkPipeline graphicsPipeline;
 	//帧缓冲
@@ -103,6 +105,14 @@ private:
 	//索引缓冲内存区域
 	VkDeviceMemory indexBufferMemory;
 
+	//用于传递到shader中的unifrom数据buffer
+	std::vector<VkBuffer> uniformBuffers;
+	//用于传递到shader中的unifrom数据内存
+	std::vector<VkDeviceMemory> uniformBuffersMemory;
+	//描述符池
+	VkDescriptorPool descriptorPool;
+	//描述符集
+	std::vector<VkDescriptorSet> descriptorSets;
 private :
 
 	//初始化窗口
@@ -149,6 +159,14 @@ private :
 	void createVertexBuffer();
 	//创建索引数据
 	void createIndexBuffer();
+	//创建管线部局描述符
+	void createDescriptorSetLayout();
+	//创建unifrombuffer
+	void createUniformBuffers();
+	//创建描述符池
+	void createDescriptorPool();
+	//创建描述符集
+	void createDescriptorSets();
 
 
 	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
@@ -168,5 +186,7 @@ private :
 	void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
 	//复制缓存数据
 	void copyBUffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
+	//更新uniform数据
+	void updateUniformBuffer(uint32_t currentImage);
 	
 };
