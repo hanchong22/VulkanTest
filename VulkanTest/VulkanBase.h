@@ -112,7 +112,15 @@ private:
 	//描述符池
 	VkDescriptorPool descriptorPool;
 	//描述符集
-	std::vector<VkDescriptorSet> descriptorSets;
+	std::vector<VkDescriptorSet> descriptorSets;	
+	//纹理数据
+	VkImage textureImage;
+	//纹理数据的显存
+	VkDeviceMemory textureImageMemory;
+	//纹理视图
+	VkImageView textureImageView;
+	//纹理采样器
+	VkSampler textureSampler;
 private :
 
 	//初始化窗口
@@ -167,6 +175,12 @@ private :
 	void createDescriptorPool();
 	//创建描述符集
 	void createDescriptorSets();
+	//创建纹理视图
+	void createTextureImageView();
+	//创建纹理
+	void createTextureImage();
+	//创建纹理采样器
+	void createTextureSampler();
 
 
 	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
@@ -188,5 +202,16 @@ private :
 	void copyBUffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 	//更新uniform数据
 	void updateUniformBuffer(uint32_t currentImage);
-	
+	//工具：创建图像缓冲区
+	void createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
+	//工具：变换图像layout
+	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
+	//工具，复制缓存数据到图像（copyBuffer的变种）
+	void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
+	//工具，开始录制单次命令（copyBuffer等操作的第一步）
+	VkCommandBuffer beginSingleTimeCommands();
+	//工具，结束录制单次命令（copyBuffer等操作的结束）
+	void endSingleTimeCommands(VkCommandBuffer commandBuffer);
+	//工具：创建纹理视图
+	VkImageView createImageView(VkImage image, VkFormat format);
 };

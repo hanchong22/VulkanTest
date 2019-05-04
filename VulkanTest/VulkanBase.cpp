@@ -1,6 +1,11 @@
 
 #include "VulkanBase.h"
 
+//stb的头文件中都没有加#pragma once，所以只能在cpp引用，否则就可能出现重复引用的LNK2005错误
+#define STB_IMAGE_IMPLEMENTATION	//开启std库中的图片工具
+#include <stb_image.h>				//读取图片工具	
+
+
 #ifdef NDEBUG
 const bool enableValidationLayers = false;
 #else
@@ -57,6 +62,9 @@ void VulkanBase::initVulkan() {
 	createGraphicsPipeline();	//创建图形管线
 	createFramebuffers();		//创建帧缓冲
 	createCommandPool();		//创建创建命令池
+	createTextureImage();		//创建纹理
+	createTextureImageView();	//创建纹理视图
+	createTextureSampler();		//创建采样器
 	createVertexBuffer();		//创建顶点数据缓冲
 	createIndexBuffer();		//创建索引数据缓冲
 	createUniformBuffers();		//创建unifrom缓冲
@@ -89,6 +97,13 @@ void VulkanBase::cleanup() {
 
 	vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 	vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+	vkDestroySampler(device, textureSampler, nullptr);
+	vkDestroyImageView(device, textureImageView, nullptr);
+
+	vkDestroyImage(device, textureImage,nullptr);
+	vkFreeMemory(device, textureImageMemory, nullptr);
+
+	
 
 	for (size_t i = 0; i < swapChainImages.size(); ++i)
 	{
@@ -291,7 +306,12 @@ bool VulkanBase::isDeviceSuitable(VkPhysicalDevice device) {
 		swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 	}
 
-	return indices.isComplete() && extensionsSupported && swapChainAdequate;
+	//获取物理设备支持的特性信息
+	//需要支持采样各向异性过滤
+	VkPhysicalDeviceFeatures supportedFeatures;
+	vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+
+	return indices.isComplete() && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
 }
 
 bool VulkanBase::checkDeviceExtensionSupport(VkPhysicalDevice device) {
@@ -330,6 +350,8 @@ void VulkanBase::createLogicalDevice() {
 	}
 
 	VkPhysicalDeviceFeatures deviceFeatures = {};
+	//纹理采样各向异性支持
+	deviceFeatures.samplerAnisotropy = VK_TRUE;
 
 	VkDeviceCreateInfo createInfo = {};
 	createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -624,32 +646,10 @@ void VulkanBase::createImageViews() {
 	//分配足够的数组空间来存储图像视图
 	swapChainImageViews.resize(swapChainImages.size());
 
-	//遍历所有交换链图像，创建图像视图
 	for (size_t i = 0; i < swapChainImages.size(); i++) {
-		VkImageViewCreateInfo createInfo = {};
-		createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-		createInfo.image = swapChainImages[i];
-		//指定图像被看作是一维纹理、二维纹理、三维纹理还是立方体贴图
-		createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		createInfo.format = swapChainImageFormat;
-		//进行图像颜色通道的映射,对于单色纹理，我们可以将所有颜色通道映射到红色通道我们也可以直接将颜色	通道的值映射为常数0 或1,在这里，我们只使用默认的映射
-		createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-
-		//指定图像的用途和图像的哪一部分可以被访问。在这里，我们的图像被用作渲染目标，并且没有细分级别，只存在一个图层,VR程序可能会有多个图图层。
-		createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		createInfo.subresourceRange.baseMipLevel = 0;
-		createInfo.subresourceRange.levelCount = 1;
-		createInfo.subresourceRange.baseArrayLayer = 0;
-		createInfo.subresourceRange.layerCount = 1;
-
-		//调用vkCreateImageView 函数创建图像视图
-		if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS) {
-			throw std::runtime_error("failed to create image views!");
-		}
+		swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat);
 	}
+
 }
 #pragma endregion
 
@@ -677,7 +677,9 @@ void VulkanBase::createRenderPass()
 	//设置渲染前后的图像格式
 	//VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL：图像被用作颜色附件
 	//VK_IMAGE_LAYOUT_PRESENT_SRC_KHR：图像被用在交换链中进行呈现操作
-	//VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL：图像被用作复制操作的目的图像
+	//VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL： 用于作为复制操作的来源(vkCmdCopyImageToBuffer)
+	//VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL：图像被用作复制操作的目的图像(如vkCmdCopyBufferToImage)
+	//VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL：	仅用于在shader中读取
 	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;			//不关心之前的图像布局方式
 	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;		//渲染后的图像可被交换链呈现
 
@@ -897,12 +899,12 @@ void VulkanBase::createGraphicsPipeline() {
 	dynamicState.pDynamicStates = dynamicStates;
 
 
-	//管线部局
+	//管线布局
 	//管理部局可以用于设置shader中的uniform变量	
 	VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 	pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pipelineLayoutInfo.setLayoutCount = 1;						//管线部局数量
-	pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;		//管线部局
+	pipelineLayoutInfo.setLayoutCount = 1;						//描述符集布局数量
+	pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;		//描述符集布局
 	pipelineLayoutInfo.pushConstantRangeCount = 0;				//可选
 	pipelineLayoutInfo.pPushConstantRanges = nullptr;			//可选
 
@@ -962,25 +964,36 @@ VkShaderModule VulkanBase::createShaderModule(const std::vector<char>& code)
 	return shaderModule;
 }
 
-//创建管线部局描述符
+//创建管线布局描述符
 void VulkanBase::createDescriptorSetLayout()
 {
-	//描述符绑定
+	//uniform描述符
 	VkDescriptorSetLayoutBinding uboLayoutBinding = {};
 	uboLayoutBinding.binding = 0;
 	//定义描述符类型，这里定义用于向shader传递uniform buffer.
 	uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	//只传递1个unifrom对象
+	//描述符数量
 	uboLayoutBinding.descriptorCount = 1;
 	//shader阶段为顶点着色器
 	uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 	//图像采样相关描述符
 	uboLayoutBinding.pImmutableSamplers = nullptr;//可选
 
+	//采样器描述符绑定
+	VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
+	samplerLayoutBinding.binding = 1;
+	samplerLayoutBinding.descriptorCount = 1;
+	//定义描述符类型：组合图像采样器
+	samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	samplerLayoutBinding.pImmutableSamplers = nullptr;//可选
+	//shader阶段为片元着色器（顶点着色器中也可以读取纹理，比如通过纹理向顶点着色器中传入数据，但大多数是在片元着色器中才有纹理的需求）
+	samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	std::array<VkDescriptorSetLayoutBinding, 2> bindings = { uboLayoutBinding, samplerLayoutBinding };
 	VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-	layoutInfo.bindingCount = 1;
-	layoutInfo.pBindings = &uboLayoutBinding;
+	layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+	layoutInfo.pBindings = bindings.data();
 
 	if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
 	{
@@ -1105,10 +1118,10 @@ void VulkanBase::createCommandBuffer()
 
 				//绑定描述符集				
 				vkCmdBindDescriptorSets(commandBuffers[i],
-					VK_PIPELINE_BIND_POINT_GRAPHICS, //描述符集并不是图形管线所独有的，需要指定要绑定的是图形管线还是计算管线
+					VK_PIPELINE_BIND_POINT_GRAPHICS, //描述符集并不是图形管线所独有的（和图形管线一样），需要指定要绑定的是图形管线还是计算管线
 					pipelineLayout, 
-					0,									//需要级定的描述符集的第一个元素索引
-					1,									//需要级定的描述符集个数
+					0,									//需要绑定的描述符集的第一个元素索引
+					1,									//需要绑定的描述符集个数
 					&descriptorSets[i],					//描述符集数组
 					0,									//指定动态描述符的数组偏移
 					nullptr
@@ -1190,16 +1203,18 @@ void VulkanBase::createUniformBuffers()
 void VulkanBase::createDescriptorPool()
 {
 	//描述符池size定义
-	VkDescriptorPoolSize poolSize = {};
-	poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	poolSize.descriptorCount = static_cast<uint32_t>(swapChainImages.size());
+	std::array<VkDescriptorPoolSize, 2> poolSizes = {};
+	poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	poolSizes[0].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
+	poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	poolSizes[1].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
 
 	VkDescriptorPoolCreateInfo poolInfo = {};
 	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 	//描述符池size的个数
-	poolInfo.poolSizeCount = 1;
+	poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
 	////描述符池size对象
-	poolInfo.pPoolSizes = &poolSize;
+	poolInfo.pPoolSizes = poolSizes.data();
 	//最大的描述符集个数
 	poolInfo.maxSets = static_cast<uint32_t>(swapChainImages.size());
 	//是否可以被清除掉
@@ -1239,24 +1254,41 @@ void VulkanBase::createDescriptorSets()
 		//缓存区域，如果使用VK_WHOLE_SIZE则表示使用整个缓冲
 		bufferInfo.range = sizeof(UniformBufferObject);
 
+		//绑定图像和采样器到描述符集
+		VkDescriptorImageInfo imageInfo = {};
+		imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		imageInfo.imageView = textureImageView;
+		imageInfo.sampler = textureSampler;
+
 		//写入数据到描述符集
-		VkWriteDescriptorSet descriptorWrite = {};
-		descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		std::array<VkWriteDescriptorSet, 2> descriptorWrites = {};
+
+		descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		//要写入的描述符集对象
-		descriptorWrite.dstSet = descriptorSets[i];
+		descriptorWrites[0].dstSet = descriptorSets[i];
 		//缓存绑定索引，因为dstSet不是精数组，所以下标0表示第一个描述符集对象
-		descriptorWrite.dstBinding = 0;
-		descriptorWrite.dstArrayElement = 0;
+		descriptorWrites[0].dstBinding = 0;
+		descriptorWrites[0].dstArrayElement = 0;
 		//描述符类型：uniform缓冲
-		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		//描述符集数量
-		descriptorWrite.descriptorCount = 1;
+		descriptorWrites[0].descriptorCount = 1;
 		//描述符集需要写入缓存对象
-		descriptorWrite.pBufferInfo = &bufferInfo;
+		descriptorWrites[0].pBufferInfo = &bufferInfo;
 		//描述符集需要写入的图像数据
-		descriptorWrite.pImageInfo = nullptr;
+		descriptorWrites[0].pImageInfo = nullptr;
+
+		descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[1].dstSet = descriptorSets[i];
+		descriptorWrites[1].dstBinding = 1;
+		descriptorWrites[1].dstArrayElement = 0;
+		//描述符类型：图像采样器
+		descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		descriptorWrites[1].descriptorCount = 1;
+		descriptorWrites[1].pImageInfo = &imageInfo;
+
 		//执行写入
-		vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 	}
 }
 
@@ -1367,8 +1399,326 @@ void VulkanBase::updateUniformBuffer(uint32_t currentImage)
 
 #pragma endregion
 
+#pragma region 图片数据与缓存
+//创建纹理视图
+void VulkanBase::createTextureImageView() {
+	textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM);
+}
 
-#pragma region 资源数据与GPU缓存
+//创建采样器，采样品并不绑定VkImage，而是可以用于访问任何VkImage对象
+void VulkanBase::createTextureSampler() {
+	VkSamplerCreateInfo samplerInfo = {};
+	samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	//指定纹理需要放大和缩小时的插值，纹理放大会出现采样过密的问题，纹理缩小会出现采样过疏的问题
+	//VK_FILTER_NEAREST或VK_FILTER_LINEAR分别对应两种情况
+	samplerInfo.magFilter = VK_FILTER_LINEAR;
+	samplerInfo.minFilter = VK_FILTER_LINEAR;
+	//寻址模式，uvw分别对应xyz
+	//VK_SAMPLER_ADDRESS_MODE_REPEAT：采样超出图像范围时重复纹理
+	//VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT：采样超出图像范围时重复镜像后的纹理
+	//VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE：采样超出图像范围时使用距离最近的边界纹素
+	//VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE：采样超出图像范围时使用镜像后距离最近的边界纹素
+	//VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER：采样超出图像返回时返回设置的边界颜色
+	samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	//开启各向异性过滤
+	samplerInfo.anisotropyEnable = VK_TRUE;
+	//各向异性最大样本个数，一般最大为16，数量与性能成反比，与品质成正比
+	samplerInfo.maxAnisotropy = 16;
+	//用于VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER寻址模式时的边界颜色
+	samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+	//坐标系统，true时为0-width和0-height，为false时为0-1，一般为false,与shader中的一至
+	samplerInfo.unnormalizedCoordinates = VK_FALSE;
+	//启用比较（可用于阴影等）
+	samplerInfo.compareEnable = VK_FALSE;
+	//比较后的操作（可用于阴影等）
+	samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+	//mipmapMode、mipLodBias、minLod 和maxLod 成员变量用于设置分级细化(mipmap)
+	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+	if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
+		throw std::runtime_error("创建纹理采样器失败");
+	}
+}
+
+//创建纹理缓冲
+void VulkanBase::createTextureImage()
+{
+	//读取到的图片尺寸和实际存在的颜色通道
+	int texWidth, texHeight, texChannels;
+	//STBI_rgb_alpha为rgba四通道，每个像素4个字节，总尺寸为width * height * 4字节
+	stbi_uc *pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+
+	VkDeviceSize imageSize = texWidth * texHeight * 4;
+	if (!pixels)
+	{
+		throw std::runtime_error("读取图片textures/texture.jpg失败");
+	}
+
+	//临时缓冲区（cpu 可见区域）
+	VkBuffer tempBuffer;
+	VkDeviceMemory tempBufferMemory;
+	createBuffer(imageSize,
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,	//作为传输来源
+		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, //从CPU 写入数据 和 保持各GPU内核的一至性
+		tempBuffer, tempBufferMemory);
+
+	//复制图片到临时缓冲区
+	void *data;
+	vkMapMemory(device, tempBufferMemory, 0, imageSize, 0, &data);
+	{
+		memcpy(data, pixels, static_cast<size_t>(imageSize));
+	}
+	vkUnmapMemory(device, tempBufferMemory);
+	//清理加载的图片（cpu内存已经不需要了）
+	stbi_image_free(pixels);
+
+	//创建正式缓存
+	createImage(texWidth, texHeight, 
+		VK_FORMAT_R8G8B8A8_UNORM, //STBI_rgb_alpha类型对应的格式
+		//tiling值 ：VK_IMAGE_TILING_LINEAR：纹素以行主序的方式排列，如果要直接访问图片数据，则需以设置为此
+		//tiling值 ：K_IMAGE_TILING_OPTIMAL：纹素以一种对访问优化的方式排列,临时缓冲等不需要处理的图片设置为此更好性能
+		VK_IMAGE_TILING_OPTIMAL,
+		//传输目标 和 被shader采样
+		VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
+		textureImage, textureImageMemory);
+
+	//转换图像布局，
+	//第一次转换，目标：允许读取图像数据作为传输目的，这样才能执行复制
+	transitionImageLayout(textureImage,
+		VK_FORMAT_R8G8B8A8_UNORM, 
+		VK_IMAGE_LAYOUT_UNDEFINED,	//old layout，VK_IMAGE_LAYOUT_UNDEFINED表示不需要访问之前的数据，必能更好
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL	//new layout ，传输目的
+	);
+	//执行复制，从临时缓冲到正式缓冲
+	copyBufferToImage(tempBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+
+	//第二次转换，目标：允许shader读取，这样在片元着色器中才能对图片进行采样
+	transitionImageLayout(textureImage, 
+		VK_FORMAT_R8G8B8A8_UNORM, 
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,		//old layout，传输目的
+		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL	//new layout shader中读取
+	);
+
+	vkDestroyBuffer(device, tempBuffer, nullptr);
+	vkFreeMemory(device, tempBufferMemory, nullptr);
+
+}
+//工具：创建图像缓冲区
+void VulkanBase::createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
+	VkImageCreateInfo imageInfo = {};
+	imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	imageInfo.imageType = VK_IMAGE_TYPE_2D;
+	imageInfo.extent.width = width;
+	imageInfo.extent.height = height;
+	imageInfo.extent.depth = 1;
+	imageInfo.mipLevels = 1;
+	imageInfo.arrayLayers = 1;
+	imageInfo.format = format;
+	imageInfo.tiling = tiling;
+	imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	imageInfo.usage = usage;
+	imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+	imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+	if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+		throw std::runtime_error("创建图形缓存失败");
+	}
+
+	VkMemoryRequirements memRequirements;
+	vkGetImageMemoryRequirements(device, image, &memRequirements);
+
+	VkMemoryAllocateInfo allocInfo = {};
+	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	allocInfo.allocationSize = memRequirements.size;
+	allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
+
+	if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
+		throw std::runtime_error("创建图形缓存的内存区域失败");
+	}
+
+	vkBindImageMemory(device, image, imageMemory, 0);
+}
+
+//工具：变换图像布局
+void VulkanBase::transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout)
+{
+	VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+	//对图像布局进行变换
+	VkImageMemoryBarrier barrier = {};
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.oldLayout = oldLayout;
+	barrier.newLayout = newLayout;
+	//来源队列族索引，VK_QUEUE_FAMILY_IGNORED表示忽略队列族所有权
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	//目标队列族索引，VK_QUEUE_FAMILY_IGNORED表示忽略队列族所有权
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	//进行布局变换的图像对图像对象及其属性
+	barrier.image = image;
+	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	barrier.subresourceRange.baseMipLevel = 0;
+	barrier.subresourceRange.levelCount = 1;
+	barrier.subresourceRange.baseArrayLayer = 0;
+	barrier.subresourceRange.layerCount = 1;
+
+	//发生在屏障之前的管线阶段
+	VkPipelineStageFlags sourceStage;
+	//发生在屏障之后的管线阶段
+	VkPipelineStageFlags destinationStage;	
+	
+	if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+		//第一次变换时，即从未定义到传输目的
+		//来源：未定义
+		barrier.srcAccessMask = 0;
+		//目的：写入
+		barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+		//上个阶段：初始管线阶段（虚拟）
+		sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+		//目标阶段：传输阶段（虚拟）
+		destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	}
+	else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+		//第二次变换时，即从传输目的到shader读取
+		//来源：写入
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		//目的：shader读取
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+		//上个阶段：传输阶段（虚拟）
+		sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+		//目标阶段：片元着色器（真实）
+		destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+	}
+	else {
+		throw std::invalid_argument("unsupported layout transition!");
+	}
+
+	//管线屏障指令，用于同步资源访问，可以用于保证图像在被读取之前数据被写入也可以被用来变换图像布，也可以被用来变换图像布局
+	//变换图像布局的指令
+	vkCmdPipelineBarrier(
+		commandBuffer,		
+		sourceStage,		//发生在屏障之前的管线阶段
+		destinationStage,	//发生在屏障之后的管线阶段
+		0,					//dependencyFlags,设置为VK_DEPENDENCY_BY_REGION_BIT 的话，屏障就变成了一个区域条件
+		0,					//memoryBarrierCount	内存屏
+		nullptr,			//pMemoryBarriers
+		0,					//bufferMemoryBarrierCount 缓冲内存屏障
+		nullptr,			//pBufferMemoryBarriers
+		1,					//imageMemoryBarrierCount 图像屏障
+		&barrier			//pImageMemoryBarriers
+	);
+
+	endSingleTimeCommands(commandBuffer);
+}
+
+//复制缓冲到图像
+void VulkanBase::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height) {
+	VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+	VkBufferImageCopy region = {};
+	region.bufferOffset = 0;
+	//以下两个为数据在内存中的存放方式，设置为0为紧凑排列
+	region.bufferRowLength = 0;
+	region.bufferImageHeight = 0;
+
+	region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	region.imageSubresource.mipLevel = 0;
+	region.imageSubresource.baseArrayLayer = 0;
+	region.imageSubresource.layerCount = 1;
+	region.imageOffset = { 0, 0, 0 };
+	region.imageExtent = {
+		width,
+		height,
+		1
+	};
+
+	vkCmdCopyBufferToImage(commandBuffer,
+		buffer, 
+		image, 
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		1, 
+		&region
+	);
+
+	endSingleTimeCommands(commandBuffer);
+}
+//工具：开始录制单次命令
+VkCommandBuffer VulkanBase::beginSingleTimeCommands()
+{
+	VkCommandBufferAllocateInfo allocInfo = {};
+	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	//类型为主执行指令
+	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	allocInfo.commandPool = commandPool;
+	allocInfo.commandBufferCount = 1;
+
+	VkCommandBuffer commandBuffer;
+	vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+	VkCommandBufferBeginInfo beginInfo = {};
+	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	//仅提交一次,命令只需执行一次
+	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	//开始录制
+	vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+	return commandBuffer;
+}
+//工具，结束录制单次命令
+void VulkanBase::endSingleTimeCommands(VkCommandBuffer commandBuffer)
+{
+	vkEndCommandBuffer(commandBuffer);
+
+	//提交命令缓冲到图形队列
+	VkSubmitInfo submitInfo = {};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &commandBuffer;
+
+	//光栅对象对空，无需异步等待
+	vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+	//等待操作完成，与光栅对象fence不一样，由于仅需执行一次，这里用同步操作就行了
+	vkQueueWaitIdle(graphicsQueue);
+
+	//销毁命令缓冲对象
+	vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+}
+
+//工具：创建纹理视图
+VkImageView VulkanBase::createImageView(VkImage image, VkFormat format) {
+
+	VkImageViewCreateInfo viewInfo = {};
+	viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	viewInfo.image = image;
+	viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	viewInfo.format = format;
+
+	//指定图像的用途和图像的哪一部分可以被访问。在这里，我们的图像被用作渲染目标，并且没有细分级别，只存在一个图层,VR程序可能会有多个图图层。
+	viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	viewInfo.subresourceRange.baseMipLevel = 0;
+	viewInfo.subresourceRange.levelCount = 1;
+	viewInfo.subresourceRange.baseArrayLayer = 0;
+	viewInfo.subresourceRange.layerCount = 1;
+	viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+	viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+	viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+	viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+	VkImageView imageView;
+	if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
+		throw std::runtime_error("创建纹理视图失败!");
+	}
+
+	return imageView;
+}
+
+#pragma endregion
+
+#pragma region 顶点数据与GPU缓存
 //读取网格模型、建立顶点数据
 void VulkanBase::createVertexBuffer()
 {
@@ -1499,44 +1849,47 @@ void VulkanBase::createBuffer( VkDeviceSize size, VkBufferUsageFlags usage, VkMe
 //工具：复制缓存数据，通过命令缓冲
 void VulkanBase::copyBUffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
 {
-	//创建命令缓冲
+	VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
-	VkCommandBufferAllocateInfo allocInfo = {};
-	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;//类型为主执行指令
-	allocInfo.commandPool = commandPool;
-	allocInfo.commandBufferCount = 1;
+	VkBufferCopy copyRegion = {};
+	copyRegion.size = size;
+	vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
 
-	VkCommandBuffer commandBuffer;
-	vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+	endSingleTimeCommands(commandBuffer);
 
-	//录制命令
-
-	VkCommandBufferBeginInfo beginInfo = {};
-	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-	//仅提交一次,命令只需执行一次
-	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-	vkBeginCommandBuffer(commandBuffer, &beginInfo);
-	{
-		VkBufferCopy copyRegion = {};
-		copyRegion.srcOffset = 0;
-		copyRegion.dstOffset = 0;
-		copyRegion.size = size;
-		vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
-	}
-	vkEndCommandBuffer(commandBuffer);
-
-	//提交命令缓冲到图形队列
-	VkSubmitInfo submitInfo = {};
-	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	submitInfo.commandBufferCount = 1;
-	submitInfo.pCommandBuffers = &commandBuffer;
-	//光栅对象对空，无需异步等待
-	vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-	//等待操作完成，与光栅对象fence不一样，由于仅需执行一次，这里用同步操作就行了
-	vkQueueWaitIdle(graphicsQueue);
-	//销毁命令缓冲对象
-	vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+	////创建命令缓冲
+	//VkCommandBufferAllocateInfo allocInfo = {};
+	//allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	//allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;//类型为主执行指令
+	//allocInfo.commandPool = commandPool;
+	//allocInfo.commandBufferCount = 1;
+	//VkCommandBuffer commandBuffer;
+	//vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+	////录制命令
+	//VkCommandBufferBeginInfo beginInfo = {};
+	//beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	////仅提交一次,命令只需执行一次
+	//beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	//vkBeginCommandBuffer(commandBuffer, &beginInfo);
+	//{
+	//	VkBufferCopy copyRegion = {};
+	//	copyRegion.srcOffset = 0;
+	//	copyRegion.dstOffset = 0;
+	//	copyRegion.size = size;
+	//	vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+	//}
+	//vkEndCommandBuffer(commandBuffer);
+	////提交命令缓冲到图形队列
+	//VkSubmitInfo submitInfo = {};
+	//submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	//submitInfo.commandBufferCount = 1;
+	//submitInfo.pCommandBuffers = &commandBuffer;
+	////光栅对象对空，无需异步等待
+	//vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+	////等待操作完成，与光栅对象fence不一样，由于仅需执行一次，这里用同步操作就行了
+	//vkQueueWaitIdle(graphicsQueue);
+	////销毁命令缓冲对象
+	//vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
 }
 
 //工具：选择合适的显存类型
