@@ -768,7 +768,7 @@ void VulkanBase::createGraphicsPipeline() {
 	//向shader传递的预编译定义
 	//fragShaderStageInfo.pSpecializationInfo = nullptr;
 
-	VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo ,fragShaderStageInfo };
+	std::vector< VkPipelineShaderStageCreateInfo> shaderStages = { vertShaderStageInfo ,fragShaderStageInfo };	
 
 
 	//顶点输入
@@ -915,8 +915,8 @@ void VulkanBase::createGraphicsPipeline() {
 
 	VkGraphicsPipelineCreateInfo pipelineInfo = {};
 	pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-	pipelineInfo.stageCount = 2;
-	pipelineInfo.pStages = shaderStages;
+	pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+	pipelineInfo.pStages = shaderStages.data();
 	pipelineInfo.pVertexInputState = &vertexInputInfo;
 	pipelineInfo.pInputAssemblyState = &inputAssembly;
 	pipelineInfo.pViewportState = &viewportState;
@@ -939,8 +939,8 @@ void VulkanBase::createGraphicsPipeline() {
 	{
 		throw std::runtime_error("创建图形渲染管线失败");
 	}
-
-
+	
+	shaderStages.clear();
 	//用完后清除shader模块(字节封装)
 	vkDestroyShaderModule(device, fragShader, nullptr);
 	vkDestroyShaderModule(device, vertShader, nullptr);
