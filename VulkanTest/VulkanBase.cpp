@@ -1247,7 +1247,7 @@ void VulkanBase::createDescriptorSets()
 	}
 
 	for (size_t i = 0; i < swapChainImages.size(); i++) {
-		//配置描述符引用的缓冲对象
+		//unifrom描述符
 		VkDescriptorBufferInfo bufferInfo = {};
 		bufferInfo.buffer = uniformBuffers[i];
 		bufferInfo.offset = 0;
@@ -1287,7 +1287,7 @@ void VulkanBase::createDescriptorSets()
 		descriptorWrites[1].descriptorCount = 1;
 		descriptorWrites[1].pImageInfo = &imageInfo;
 
-		//执行写入
+		//执行写入数据到描述符
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 	}
 }
@@ -1295,7 +1295,7 @@ void VulkanBase::createDescriptorSets()
 //绘制，每帧调用
 void VulkanBase::drawFrame()
 {
-	//等待一组光栅(fence) 中的一个或全部光栅(fence) 发出信号,waitall设置为VK_TRUE在此处无意义，因为只有一个光栅
+	//等待一组光栅(fence) 中的一个或全部光栅(fence) 发出信号,如果只有一个光栅则waitall设置为VK_TRUE在此处无意义
 	vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, std::numeric_limits<uint64_t>::max());
 	//收到光栅信号后，重置光栅对象为未发出信号的状态
 	vkResetFences(device, 1, &inFlightFences[currentFrame]);
@@ -1323,7 +1323,7 @@ void VulkanBase::drawFrame()
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	//要等待的信号量对象
 	VkSemaphore waitSemaphore[] = {imageAvailableSemaphores[currentFrame]};
-	//需要等待的管线阶段,这里我们需要写入颜色数据到图像，所以需要等待图像管线到达可以写入颜色附着的管线阶段
+	//需要等待的管线阶段,这里我们需要写入颜色数据到图像，所以需要等待图像管线到达可以写入颜色附件的管线阶段
 	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 	submitInfo.waitSemaphoreCount = 1;
 	//waitStages 数组中的条目和pWaitSemaphores中相同索引的信号量相对应。
