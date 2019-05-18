@@ -1,12 +1,19 @@
 #pragma once
 
+//GLM_FORCE_DEPTH_ZERO_TO_ONEA让glm库使用0-1的深度值，而不是默认opengl的-1 - 1
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE	
+#define GLM_ENABLE_EXPERIMENTAL
+
 #include <vector>
 #include <array>
 #include <memory>
 #include <fstream>
+#include <unordered_map>
 #include <glm/glm.hpp>		//线性代数库
 #include <glm/gtc/matrix_transform.hpp>	//变化矩阵库
+#include <glm/gtx/hash.hpp>
 #include <chrono>			//计时
+
 
 
 //可并行处理的帧
@@ -15,6 +22,9 @@ const int MAX_FRAMES_IN_FLIGHT = 2;
 //定义窗口大小
 const int WIDTH = 1280;
 const int HEIGHT = 720;
+
+const std::string MODEL_PATH = "models/chalet.obj";
+const std::string TEXTURE_PATH = "textures/chalet.jpg";
 
 //surface支持交换链的细节
 struct SwapChainSupportDetails {
@@ -64,25 +74,40 @@ struct Vertex {
 
 		return attributeDescriptions;
 	}
-};
 
-//定义一个网格模型的顶点数据
-const std::vector<Vertex> vertices = {
-	{{-0.5f, -0.5f,0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-	{{0.5f, -0.5f,0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-	{{0.5f, 0.5f,0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-	{{-0.5f, 0.5f,0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+	bool operator==(const Vertex& other) const {
+		return pos == other.pos && color == other.color && texCoord == other.texCoord;
+	}
+};
+namespace std {
+	template<> struct hash<Vertex> {
+		size_t operator()(Vertex const& vertex) const {
+			return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
+		}
+	};
+}
 
-	{{-0.5f, -0.5f,-0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-	{{0.5f, -0.5f,-0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-	{{0.5f, 0.5f,-0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-	{{-0.5f, 0.5f,-0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
-};
-//定义一个网格模型的索引数据
-const std::vector<uint16_t> indices = {
-	0, 1, 2, 2, 3, 0,
-	4,5,6,6,7,4
-};
+
+
+
+////定义一个网格模型的顶点数据
+//const std::vector<Vertex> vertices = {
+//	{{-0.5f, -0.5f,0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+//	{{0.5f, -0.5f,0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+//	{{0.5f, 0.5f,0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+//	{{-0.5f, 0.5f,0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+//
+//	{{-0.5f, -0.5f,-0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+//	{{0.5f, -0.5f,-0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+//	{{0.5f, 0.5f,-0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+//	{{-0.5f, 0.5f,-0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
+//};
+////定义一个网格模型的索引数据
+//const std::vector<uint16_t> indices = {
+//	0, 1, 2, 2, 3, 0,
+//	4,5,6,6,7,4
+//};
+//
 
 //定义一个要传入shader uniform的结构体
 //使用glm中定义的类型，是为了和shader中的类型保持一至，可以放心的使用memcpy来复制数据到GPU

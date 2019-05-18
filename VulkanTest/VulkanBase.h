@@ -121,6 +121,20 @@ private:
 	VkImageView textureImageView;
 	//纹理采样器
 	VkSampler textureSampler;
+
+	//深度图
+	VkImage depthImage;
+	//深度图显存
+	VkDeviceMemory depthImageMemory;
+	//深度图视图
+	VkImageView depthImageView;
+
+	//顶点
+	std::vector<Vertex> vertices;
+	//索引
+	std::vector<uint32_t> indices;
+
+	
 private :
 
 	//初始化窗口
@@ -181,6 +195,9 @@ private :
 	void createTextureImage();
 	//创建纹理采样器
 	void createTextureSampler();
+	//创建深度图资源 
+	void createDepthResources();
+	void loadModel();
 
 
 	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
@@ -213,5 +230,12 @@ private :
 	//工具，结束录制单次命令（copyBuffer等操作的结束）
 	void endSingleTimeCommands(VkCommandBuffer commandBuffer);
 	//工具：创建纹理视图
-	VkImageView createImageView(VkImage image, VkFormat format);
+	VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
+	//工具：选择支持的图片格式
+	VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+	//工具：选择图片格式
+	VkFormat findDepthFormat();
+	//工具：是否支持深度图格式
+	bool hasStencilComponent(VkFormat format);
+
 };

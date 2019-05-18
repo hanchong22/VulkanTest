@@ -70,23 +70,24 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>C:\VulkanSDK\1.1.101.0\Include;C:\VulkanSDK\1.1.101.0\Third-Party\Include;$(IncludePath)</IncludePath>
+    <IncludePath>D:\ThirtLib\stb;D:\ThirtLib\tinyobjloader;$(IncludePath)</IncludePath>
     <LibraryPath>C:\VulkanSDK\1.1.101.0\Lib32;C:\VulkanSDK\1.1.101.0\Third-Party\Bin32;$(LibraryPath)</LibraryPath>
     <ReferencePath>$(ReferencePath)</ReferencePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
     <LibraryPath>C:\VulkanSDK\1.1.101.0\Third-Party\Bin;$(LibraryPath)</LibraryPath>
-    <IncludePath>D:\ThirtLib\stb;$(IncludePath)</IncludePath>
+    <IncludePath>D:\ThirtLib\stb;D:\ThirtLib\tinyobjloader;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
     <LibraryPath>C:\VulkanSDK\1.1.101.0\Third-Party\Bin32;C:\VulkanSDK\1.1.101.0\Lib32;$(LibraryPath)</LibraryPath>
+    <IncludePath>D:\ThirtLib\stb;D:\ThirtLib\tinyobjloader;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
     <LibraryPath>C:\VulkanSDK\1.1.101.0\Third-Party\Bin;$(LibraryPath)</LibraryPath>
-    <IncludePath>D:\ThirtLib\stb;$(IncludePath)</IncludePath>
+    <IncludePath>D:\ThirtLib\stb;D:\ThirtLib\tinyobjloader;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
